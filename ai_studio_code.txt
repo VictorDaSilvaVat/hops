@@ -1,0 +1,2 @@
+MATCH (a:Address)-[r:SENT]->(b:Address)
+RETURN a, r, b

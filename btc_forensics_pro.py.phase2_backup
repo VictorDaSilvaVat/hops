@@ -1,0 +1,420 @@
+import time
+import json
+import logging
+from datetime import datetime
+from typing import Optional
+from neo4j import GraphDatabase
+
+from blockstream_client import BlockstreamClient
+from walletexplorer_client import WalletExplorerClient
+from config import Config
+from exceptions import APIError, NetworkError, RateLimitError
+
+
+class BTCForensicsPro:
+    def __init__(
+        self,
+        uri,
+        user,
+        password,
+        verbose=True,
+        max_hops=3,
+        min_amount=0.00001,  # FILTRO ANTI-DUST
+        ignore_threshold=True,
+        save_outputs_without_address=True,
+        detect_change=True,
+        config: Optional[Config] = None,
+        blockstream_client: Optional[BlockstreamClient] = None,
+        walletexplorer_client: Optional[WalletExplorerClient] = None
+    ):
+        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.verbose = verbose
+        self.max_hops = max_hops
+        self.min_amount = min_amount  # FILTRO ANTI-DUST
+        self.ignore_threshold = ignore_threshold
+        self.save_outputs_without_address = save_outputs_without_address
+        self.detect_change = detect_change
+        
+        # Use dependency injection or create defaults
+        self.config = config or Config()
+        self.blockstream = blockstream_client or BlockstreamClient()
+        self.walletexplorer = walletexplorer_client or WalletExplorerClient()
+
+        self.wallet_cache = {}
+        self.processed_addresses = set()
+        
+        # Configure logging
+        self.logger = logging.getLogger(__name__)
+        if self.verbose:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
+
+    def log(self, level, *args):
+        """Log a message with the given level."""
+        if level == "debug":
+            self.logger.debug(*args)
+        elif level == "info":
+            self.logger.info(*args)
+        elif level == "warning":
+            self.logger.warning(*args)
+        elif level == "error":
+            self.logger.error(*args)
+        elif level == "critical":
+            self.logger.critical(*args)
+
+    def close(self):
+        self.driver.close()
+
+    # ---------------------------------------------------------
+    # WALLETEXPLORER
+    # ---------------------------------------------------------
+    def get_wallet_id(self, address):
+        if address in self.wallet_cache:
+            return self.wallet_cache[address]
+
+        wid = self.walletexplorer.get_wallet_id(address)
+        self.wallet_cache[address] = wid
+        return wid
+
+    def classify_entity(self, wallet_id):
+        # Use the enhanced entity recognizer
+        try:
+            from entity_recognizer import entity_recognizer
+            profile = entity_recognizer.recognize_entity(wallet_id)
+            return profile.entity_type.value
+        except ImportError:
+            # Fallback to original implementation if entity_recognizer is not available
+            if not wallet_id or wallet_id == "unknown":
+                return "other"
+
+            wid = wallet_id.lower()
+
+            mixers = ["tornado", "wasabi", "samourai"]
+            exchanges = ["binance", "coinbase", "kraken", "bitfinex", "kucoin", "okx"]
+            bridges = ["optimism", "arbitrum", "polygon", "bridge"]
+            sanctioned = ["ofac", "sdn", "lazarus", "garantex"]
+
+            if any(k in wid for k in sanctioned):
+                return "sanctioned"
+            if any(k in wid for k in mixers):
+                return "mixer"
+            if any(k in wid for k in exchanges):
+                return "exchange"
+            if any(k in wid for k in bridges):
+                return "bridge"
+
+            return "other"
+
+    # ---------------------------------------------------------
+    # GUARDAR EN NEO4J
+    # ---------------------------------------------------------
+    def save_to_graph(self, tx_info):
+        query = """
+        MERGE (a:Address {address: $from_addr})
+        SET a.wallet_id = $from_wallet,
+            a.entity_type = $from_entity,
+            a.chain = "BTC"
+
+        MERGE (b:Address {address: $to_addr})
+        SET b.wallet_id = $to_wallet,
+            b.entity_type = $to_entity,
+            b.chain = "BTC"
+
+        MERGE (a)-[r:SENT {txid: $txid}]->(b)
+        SET r.amount = $amount,
+            r.hop = $hop,
+            r.timestamp = $time,
+            r.is_change = $is_change,
+            r.chain = "BTC"
+        """
+
+        with self.driver.session() as session:
+            session.run(query, **tx_info)
+
+    # ---------------------------------------------------------
+    # GUARDAR REPORTE COMO NODO EN NEO4J
+    # ---------------------------------------------------------
+    def save_report_to_neo4j(self, address, report_text, model="ollama", metadata=None):
+        """
+        Crea un nodo :Report con propiedades: address, content, model, created_at y metadata (JSON string).
+        """
+        created_at = int(time.time())
+        meta_json = json.dumps(metadata or {})
+        query = """
+        MERGE (r:Report {address:$address, created_at:$created_at})
+        SET r.content = $content,
+            r.model = $model,
+            r.metadata = $metadata
+        RETURN id(r) AS report_id
+        """
+        with self.driver.session() as session:
+            rec = session.run(query, address=address, created_at=created_at,
+                              content=report_text, model=model, metadata=meta_json).single()
+            if rec:
+                return rec["report_id"]
+        return None
+
+    # ---------------------------------------------------------
+    # GUARDAR REPORTE EN ARCHIVOS (TXT y MD)
+    # ---------------------------------------------------------
+    def save_report_to_files(self, address, report_text, out_dir="reports"):
+        """
+        Guarda report_text en TXT y Markdown en carpeta out_dir.
+        Devuelve rutas escritas.
+        """
+        import os
+        os.makedirs(out_dir, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        base = f"{out_dir}/report_{address}_{ts}"
+        txt_path = f"{base}.txt"
+        md_path = f"{base}.md"
+
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(report_text)
+
+        # Para Markdown, añadimos un encabezado simple
+        md_content = f"# Reporte Forense {address}\n\n" + report_text.replace("\n", "\n\n")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+        return {"txt": txt_path, "md": md_path}
+
+    # ---------------------------------------------------------
+    # DETECCIÓN DE CHANGE
+    # ---------------------------------------------------------
+    def is_change_output(self, inputs, output_address):
+        input_wallets = set(
+            self.get_wallet_id(vin["prevout"]["scriptpubkey_address"])
+            for vin in inputs
+            if vin.get("prevout") and vin["prevout"].get("scriptpubkey_address")
+        )
+
+        out_wallet = self.get_wallet_id(output_address)
+        return out_wallet in input_wallets
+
+    # ---------------------------------------------------------
+    # CONSTRUIR RESUMEN PARA LA IA
+    # ---------------------------------------------------------
+    def build_summary(self, address, limit=200):
+        """
+        Construye un resumen textual de las relaciones guardadas en Neo4j para enviar a Ollama.
+        """
+        driver = self.driver
+        q = """
+        MATCH (a:Address {address:$addr})-[r:SENT]->(b)
+        RETURN a.address AS from_addr, b.address AS to_addr,
+               r.amount AS amount, r.txid AS txid, r.hop AS hop,
+               r.timestamp AS ts, r.is_change AS is_change
+        ORDER BY r.timestamp ASC
+        LIMIT $limit
+        """
+
+        rows = []
+        with driver.session() as s:
+            for rec in s.run(q, addr=address, limit=limit):
+                rows.append(dict(rec))
+
+        if not rows:
+            return f"No se encontraron transacciones para {address}."
+
+        resumen_lines = []
+        resumen_lines.append("RESUMEN FORENSE")
+        resumen_lines.append(f"Dirección analizada: {address}")
+        resumen_lines.append(f"Relaciones encontradas: {len(rows)}")
+        resumen_lines.append("")
+
+        total_in = 0.0
+        total_out = 0.0
+        for r in rows:
+            amt = float(r.get("amount") or 0.0)
+            line = f"{r['from_addr']} → {r['to_addr']} | {amt:.8f} BTC | hop {r.get('hop')} | tx {r.get('txid')}"
+            resumen_lines.append(line)
+            if r["to_addr"] == address:
+                total_in += amt
+            if r["from_addr"] == address:
+                total_out += amt
+
+        resumen_lines.append("")
+        resumen_lines.append(f"Total entrante (muestra): {total_in:.8f} BTC")
+        resumen_lines.append(f"Total saliente (muestra): {total_out:.8f} BTC")
+        resumen_lines.append("")
+        resumen_lines.append(f"Notas: se muestran hasta {limit} relaciones ordenadas por tiempo.")
+        return "\n".join(resumen_lines)
+
+    # ---------------------------------------------------------
+    # LLAMADA A OLLAMA (GENERAR REPORTE IA)
+    # ---------------------------------------------------------
+    def generate_ai_report_with_ollama(self, prompt_text, model="llama3", timeout=120, debug=False):
+        """
+        Envía prompt_text a Ollama local (http://localhost:11434/api/generate) y devuelve la respuesta.
+        """
+        try:
+            payload = {
+                "model": model,
+                "prompt": prompt_text,
+                "stream": False
+            }
+
+            if debug:
+                print("[DEBUG] Enviando prompt a Ollama:", payload)
+
+            r = requests.post("http://localhost:11434/api/generate", json=payload, timeout=timeout)
+
+            if r.status_code != 200:
+                return f"[ERROR] Ollama devolvió código {r.status_code}: {r.text}"
+
+            data = r.json()
+            # Dependiendo de la versión de Ollama, la clave puede variar; intentamos varias
+            if isinstance(data, dict):
+                if "response" in data:
+                    return data["response"]
+                if "text" in data:
+                    return data["text"]
+                # si la respuesta viene en 'choices'
+                if "choices" in data and isinstance(data["choices"], list) and data["choices"]:
+                    c = data["choices"][0]
+                    return c.get("text") or c.get("message") or str(c)
+            # fallback
+            return str(data)
+        except Exception as e:
+            return f"[ERROR] No se pudo conectar con Ollama: {e}"
+
+    # ---------------------------------------------------------
+    # RASTREO BIDIRECCIONAL CONTROLADO
+    # FAN-IN = 1 hop
+    # FAN-OUT = max_hops
+    # ---------------------------------------------------------
+    def trace(self, address, hop=1, direction="both"):
+        """
+        direction:
+            "both"   → primer nivel (dirección raíz)
+            "fanin"  → solo 1 hop hacia atrás
+            "fanout" → hasta max_hops hacia adelante
+        """
+
+        # FAN-IN solo permite 1 hop
+        if direction == "fanin" and hop > 1:
+            return
+
+        # FAN-OUT permite hasta max_hops
+        if direction == "fanout" and hop > self.max_hops:
+            return
+
+        # Evitar loops
+        key = f"{address}-{direction}-{hop}"
+        if key in self.processed_addresses:
+            return
+        self.processed_addresses.add(key)
+
+        try:
+            txs = self.blockstream.get_address_txs(address)
+        except (APIError, NetworkError) as e:
+            self.log("error", "Failed to get transactions for address %s: %s", address, e)
+            return
+        if not txs:
+            self.log("debug", "No transactions found for address %s", address)
+            return
+
+        for tx in txs:
+            txid = tx["txid"]
+            try:
+                full_tx = self.blockstream.get_tx(txid)
+            except (APIError, NetworkError) as e:
+                self.log("error", "Failed to get transaction %s: %s", txid, e)
+                continue
+            if not full_tx:
+                self.log("debug", "No data returned for transaction %s", txid)
+                continue
+
+            inputs = full_tx.get("vin", [])
+            outputs = full_tx.get("vout", [])
+
+            # ---------------------------------------------------------
+            # FAN-OUT (la dirección envía fondos)
+            # ---------------------------------------------------------
+            is_sender = any(
+                vin.get("prevout", {}).get("scriptpubkey_address") == address
+                for vin in inputs
+            )
+
+            if direction in ("both", "fanout") and is_sender:
+                for vout in outputs:
+                    dest = vout.get("scriptpubkey_address")
+                    if not dest:
+                        continue
+
+                    amount = vout.get("value", 0) / 1e8
+
+                    # FILTRO ANTI-DUST
+                    if amount < self.min_amount:
+                        continue
+
+                    ts = full_tx["status"]["block_time"]
+
+                    tx_payload = {
+                        "from_addr": address,
+                        "from_wallet": self.get_wallet_id(address),
+                        "from_entity": self.classify_entity(self.get_wallet_id(address)),
+                        "to_addr": dest,
+                        "to_wallet": self.get_wallet_id(dest),
+                        "to_entity": self.classify_entity(self.get_wallet_id(dest)),
+                        "amount": amount,
+                        "txid": txid,
+                        "hop": hop,
+                        "time": ts,
+                        "is_change": self.is_change_output(inputs, dest),
+                    }
+
+                    try:
+                        self.save_to_graph(tx_payload)
+                    except Exception as e:
+                        self.log("error", "Failed to save transaction to graph: %s", e)
+
+                    # Recursión SOLO para fan-out
+                    if not tx_payload["is_change"]:
+                        self.trace(dest, hop + 1, direction="fanout")
+
+            # ---------------------------------------------------------
+            # FAN-IN (la dirección recibe fondos)
+            # ---------------------------------------------------------
+            if direction in ("both", "fanin"):
+                for vout in outputs:
+                    dest = vout.get("scriptpubkey_address")
+                    if dest != address:
+                        continue
+
+                    amount = vout.get("value", 0) / 1e8
+
+                    # FILTRO ANTI-DUST
+                    if amount < self.min_amount:
+                        continue
+
+                    ts = full_tx["status"]["block_time"]
+
+                    for vin in inputs:
+                        src = vin.get("prevout", {}).get("scriptpubkey_address")
+                        if not src:
+                            continue
+
+                        tx_payload = {
+                            "from_addr": src,
+                            "from_wallet": self.get_wallet_id(src),
+                            "from_entity": self.classify_entity(self.get_wallet_id(src)),
+                            "to_addr": address,
+                            "to_wallet": self.get_wallet_id(address),
+                            "to_entity": self.classify_entity(self.get_wallet_id(address)),
+                            "amount": amount,
+                            "txid": txid,
+                            "hop": hop,
+                            "time": ts,
+                            "is_change": False,
+                        }
+
+                        try:
+                            self.save_to_graph(tx_payload)
+                        except Exception as e:
+                            self.log("error", "Failed to save transaction to graph: %s", e)
+
+                        # Recursión SOLO 1 hop hacia atrás
+                        self.trace(src, hop + 1, direction="fanin")

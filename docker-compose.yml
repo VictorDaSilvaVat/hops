@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: hops-neo4j
+    restart: unless-stopped
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-neo4jneo4j}
+      - NEO4J_server_config_strict__validation_enabled=false
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+    ports:
+      - "7687:7687"   # Bolt
+      - "7474:7474"   # Browser UI
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-neo4jneo4j} 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  app:
+    build: .
+    container_name: hops-app
+    restart: unless-stopped
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-neo4jneo4j}
+      - AI_PROVIDER=${AI_PROVIDER:-openrouter}
+      - AI_MODEL=${AI_MODEL:-google/gemini-2.0-flash-001}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - MAX_HOPS=${MAX_HOPS:-2}
+      - SANCTIONS_INTERNAL_KEY=${SANCTIONS_INTERNAL_KEY:-}
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=10
+    ports:
+      - "8501:8501"
+    volumes:
+      - hops_reports:/app/reports
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  hops_reports:

@@ -1,0 +1,9 @@
+streamlit>=1.30
+pandas>=2.0
+networkx>=3.0
+matplotlib>=3.8
+altair>=5.0
+neo4j>=5.0
+requests>=2.30
+pyvis>=0.3
+fpdf2>=2.7
