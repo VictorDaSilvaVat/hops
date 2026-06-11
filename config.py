@@ -60,6 +60,9 @@ class APIConfig:
     sanctions_internal_key: str = field(
         default_factory=lambda: os.getenv("SANCTIONS_INTERNAL_KEY", "")
     )
+    etherscan_api_key: str = field(
+        default_factory=lambda: os.getenv("ETHERSCAN_API_KEY", "")
+    )
     
     # Caching
     cache_ttl_seconds: int = field(

@@ -321,6 +321,71 @@ class EntityRecognizer:
             total_volume_btc=0.0
         )
     
+    # Mapping from WASS API classification strings to EntityType
+    CLASSIFICATION_MAP = {
+        "centralized exchange": EntityType.EXCHANGE,
+        "exchange": EntityType.EXCHANGE,
+        "dex": EntityType.DEFI_PROTOCOL,
+        "defi": EntityType.DEFI_PROTOCOL,
+        "defi protocol": EntityType.DEFI_PROTOCOL,
+        "mixer": EntityType.MIXER,
+        "tumbler": EntityType.MIXER,
+        "bridge": EntityType.BRIDGE,
+        "mining pool": EntityType.MINING_POOL,
+        "gambling": EntityType.GAMBLING,
+        "casino": EntityType.GAMBLING,
+        "darknet": EntityType.DARKNET_MARKET,
+        "darknet market": EntityType.DARKNET_MARKET,
+        "marketplace": EntityType.MARKETPLACE,
+        "hot wallet": EntityType.WALLET_SERVICE,
+        "wallet service": EntityType.WALLET_SERVICE,
+        "wallet": EntityType.WALLET_SERVICE,
+        "sanctioned": EntityType.SANCTIONED,
+        "individual": EntityType.INDIVIDUAL,
+        "private wallet": EntityType.INDIVIDUAL,
+    }
+
+    def classify_from_identification(self, name: str = None,
+                                      classification: str = None,
+                                      address: str = None) -> EntityProfile:
+        """
+        Classify entity from WASS API identification response.
+
+        Args:
+            name: Entity name (e.g. "Binance Hot Wallet")
+            classification: Entity classification (e.g. "Centralized Exchange")
+            address: Blockchain address
+
+        Returns:
+            EntityProfile with classification and confidence
+        """
+        if not classification:
+            return self._create_unknown_profile(address)
+
+        classification_lower = classification.lower().strip()
+        entity_type = self.CLASSIFICATION_MAP.get(classification_lower, EntityType.UNKNOWN)
+
+        labels = []
+        if name:
+            labels.append(name)
+        if entity_type != EntityType.UNKNOWN:
+            labels.append(entity_type.value)
+
+        confidence = 0.7 if entity_type != EntityType.UNKNOWN else 0.2
+
+        return EntityProfile(
+            address=address or "",
+            entity_type=entity_type,
+            confidence=confidence,
+            labels=list(set(labels)),
+            metadata={
+                "source": "wass_api",
+                "classification": classification,
+                "name": name,
+                "recognized_at": int(time.time()),
+            },
+        )
+
     def get_risk_score(self, entity_profile: EntityProfile) -> float:
         """
         Calculate risk score for an entity profile.

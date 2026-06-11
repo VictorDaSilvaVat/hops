@@ -36,8 +36,10 @@ else:
 class EnhancedForensicReporter:
     """Generates comprehensive forensic reports with visualizations in PDF format."""
 
-    def __init__(self, output_dir: str = "reports"):
+    def __init__(self, output_dir: str = "reports", chain: str = "btc"):
         self.output_dir = output_dir
+        self.chain = chain
+        self.unit = "ETH" if chain == "eth" else "BTC"
 
     def generate_report_folder(
         self,
@@ -69,7 +71,7 @@ class EnhancedForensicReporter:
 
         html_path = self._generate_html_report(folder, data, edges, chart_paths, graph_img_path)
 
-        pdf_path = self._generate_pdf_report(html_path, folder)
+        pdf_path, pdf_error = self._generate_pdf_report(html_path, folder)
 
         graph_path = None
         if transaction_graph_html:
@@ -80,6 +82,7 @@ class EnhancedForensicReporter:
         return {
             "folder": folder,
             "pdf": pdf_path,
+            "pdf_error": pdf_error,
             "html": html_path,
             "graph": graph_path,
             "data_json": os.path.join(folder, "analysis_metadata.json"),
@@ -194,13 +197,13 @@ class EnhancedForensicReporter:
                 df_time = df[df["ts"].notna()].copy()
                 df_time["datetime"] = pd.to_datetime(df_time["ts"], unit="s")
                 df_time = df_time.sort_values("datetime")
-                df_time["amount_btc"] = df_time["amount"].astype(float)
+                df_time["amount_native"] = df_time["amount"].astype(float)
 
-                ax.plot(df_time["datetime"], df_time["amount_btc"],
+                ax.plot(df_time["datetime"], df_time["amount_native"],
                         color="#2196F3", linewidth=1, alpha=0.8, marker="o", markersize=3)
-                ax.fill_between(df_time["datetime"], df_time["amount_btc"], alpha=0.1, color="#2196F3")
+                ax.fill_between(df_time["datetime"], df_time["amount_native"], alpha=0.1, color="#2196F3")
                 ax.set_xlabel("Fecha / Hora (UTC)")
-                ax.set_ylabel("Monto (BTC)")
+                ax.set_ylabel(f"Monto ({self.unit})")
                 ax.set_title("Linea de Tiempo de Transacciones", fontsize=13, fontweight="bold")
                 ax.grid(True, alpha=0.3)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
@@ -226,7 +229,7 @@ class EnhancedForensicReporter:
 
                 ax1.bar(hourly["hour"], hourly["total_amount"], color="#FF9800", alpha=0.8, width=0.7)
                 ax1.set_xlabel("Hora del dia (UTC)")
-                ax1.set_ylabel("Monto total (BTC)")
+                ax1.set_ylabel(f"Monto total ({self.unit})")
                 ax1.set_title("Distribucion por Hora - Monto", fontsize=11, fontweight="bold")
                 ax1.set_xticks(range(24))
                 ax1.grid(True, alpha=0.3, axis="y")
@@ -418,7 +421,7 @@ class EnhancedForensicReporter:
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<title>Reporte Forense BTC - {data["address"][:20]}</title>
+<title>Reporte Forense {self.unit} - {data["address"][:20]}</title>
 <style>
     @page {{ size: A4; margin: 2cm; }}
     * {{ box-sizing: border-box; }}
@@ -452,14 +455,14 @@ class EnhancedForensicReporter:
 
 <div class="cover">
     <div class="logo">{"<img src='data:image/png;base64," + logo_b64 + "' alt='Logo' style='max-width:300px;'>" if logo_b64 else ""}</div>
-    <h1>Reporte Forense de Bitcoin</h1>
+    <h1>Reporte Forense de {self.unit}</h1>
     <div class="subtitle">Analisis de Transacciones y Entidades</div>
     <div class="meta">
         <p><strong>Direccion:</strong> {data["address"]}</p>
         <p><strong>Fecha:</strong> {data["timestamp"]}</p>
         <p><strong>Total Transacciones:</strong> {data["total_transactions"]}</p>
-        <p><strong>Total Recibido:</strong> {data["total_in_btc"]:.8f} BTC</p>
-        <p><strong>Total Enviado:</strong> {data["total_out_btc"]:.8f} BTC</p>
+        <p><strong>Total Recibido:</strong> {data["total_in_btc"]:.8f} {self.unit}</p>
+        <p><strong>Total Enviado:</strong> {data["total_out_btc"]:.8f} {self.unit}</p>
     </div>
 </div>
 
@@ -471,11 +474,11 @@ class EnhancedForensicReporter:
     </div>
     <div class="summary-card">
         <div class="value">{data["total_in_btc"]:.4f}</div>
-        <div class="label">BTC Recibido</div>
+        <div class="label">{self.unit} Recibido</div>
     </div>
     <div class="summary-card">
         <div class="value">{data["total_out_btc"]:.4f}</div>
-        <div class="label">BTC Enviado</div>
+        <div class="label">{self.unit} Enviado</div>
     </div>
     <div class="summary-card">
         <div class="value">{data["unique_addresses"]}</div>
@@ -519,7 +522,7 @@ class EnhancedForensicReporter:
 <h2>8. Flujo de Fondos (Sankey - Top 50)</h2>
 <p>Principales flujos de fondos entre direcciones agrupados por par origen-destino.</p>
 <table>
-<tr><th>Origen</th><th>Destino</th><th class="num">Monto (BTC)</th></tr>
+<tr><th>Origen</th><th>Destino</th><th class="num">Monto ({self.unit})</th></tr>
 {sankey_rows_html}
 </table>
 
@@ -528,7 +531,7 @@ class EnhancedForensicReporter:
 <p>Listado detallado de transacciones (maximo 200).</p>
 <table>
 <tr>
-    <th>Desde</th><th>Hacia</th><th class="num">Monto (BTC)</th>
+    <th>Desde</th><th>Hacia</th><th class="num">Monto ({self.unit})</th>
     <th class="num">Fecha</th><th>Ent. Origen</th><th>Ent. Destino</th>
     <th>Labels Origen</th><th>Labels Destino</th><th>Hop</th>
 </tr>
@@ -622,8 +625,8 @@ class EnhancedForensicReporter:
             pdf.cell(0, 7, f"Direccion: {addr}", align="C", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 7, f"Fecha: {data.get('timestamp', '')}", align="C", new_x="LMARGIN", new_y="NEXT")
             pdf.cell(0, 7, f"Total Transacciones: {data.get('total_transactions', 0)}", align="C", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 7, f"Total Recibido: {data.get('total_in_btc', 0):.8f} BTC", align="C", new_x="LMARGIN", new_y="NEXT")
-            pdf.cell(0, 7, f"Total Enviado: {data.get('total_out_btc', 0):.8f} BTC", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Total Recibido: {data.get('total_in_btc', 0):.8f} {self.unit}", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 7, f"Total Enviado: {data.get('total_out_btc', 0):.8f} {self.unit}", align="C", new_x="LMARGIN", new_y="NEXT")
 
             # --- Executive Summary ---
             pdf.add_page()
@@ -632,8 +635,8 @@ class EnhancedForensicReporter:
                 f"Este reporte analiza {data.get('total_transactions', 0)} transacciones "
                 f"asociadas a la direccion {addr}. "
                 f"Se identificaron {data.get('unique_addresses', 0)} direcciones unicas "
-                f"con un volumen total de {data.get('total_in_btc', 0):.4f} BTC recibidos "
-                f"y {data.get('total_out_btc', 0):.4f} BTC enviados."
+                f"con un volumen total de {data.get('total_in_btc', 0):.4f} {self.unit} recibidos "
+                f"y {data.get('total_out_btc', 0):.4f} {self.unit} enviados."
             )
 
             # --- Sanctions Check ---
@@ -758,11 +761,13 @@ class EnhancedForensicReporter:
 
             pdf.output(pdf_path)
             logger.info(f"PDF report saved to {pdf_path}")
-            return pdf_path
+            return pdf_path, None
 
         except ImportError as e:
-            logger.warning(f"fpdf2 not available ({e}), PDF generation skipped")
-            return None
+            msg = f"Dependencia faltante: fpdf2 no instalado ({e})"
+            logger.warning(msg)
+            return None, msg
         except Exception as e:
-            logger.error(f"Error generating PDF: {e}")
-            return None
+            msg = f"Error generando PDF: {e}"
+            logger.error(msg)
+            return None, msg

@@ -25,7 +25,7 @@ class Neo4jRepository(ABC):
     @abstractmethod
     def save_transaction(self, txid: str, from_address: str, to_address: str,
                         amount: float, block_time: int, is_change: bool = False,
-                        hop: int = 1) -> bool:
+                        hop: int = 1, chain: str = "btc") -> bool:
         """
         Save a transaction relationship between addresses.
 
@@ -33,10 +33,11 @@ class Neo4jRepository(ABC):
             txid: Transaction ID
             from_address: Source address
             to_address: Destination address
-            amount: Transaction amount in BTC
+            amount: Transaction amount in native unit (BTC/ETH)
             block_time: Unix timestamp of block confirmation
             is_change: Whether this is a change output
             hop: Hop distance from the root address
+            chain: Chain identifier ("btc", "eth", etc.)
 
         Returns:
             True if successful, False otherwise
@@ -44,12 +45,13 @@ class Neo4jRepository(ABC):
         pass
 
     @abstractmethod
-    def get_address(self, address: str) -> Optional[Address]:
+    def get_address(self, address: str, chain: str = "btc") -> Optional[Address]:
         """
         Retrieve an address from the graph database.
 
         Args:
-            address: Bitcoin address to retrieve
+            address: Blockchain address to retrieve
+            chain: Chain identifier
 
         Returns:
             Address domain model or None if not found
@@ -57,14 +59,16 @@ class Neo4jRepository(ABC):
         pass
 
     @abstractmethod
-    def find_path(self, start_address: str, end_address: str, max_hops: int = 5) -> List[List[str]]:
+    def find_path(self, start_address: str, end_address: str, max_hops: int = 5,
+                  chain: str = "btc") -> List[List[str]]:
         """
         Find all paths between two addresses within max_hops.
 
         Args:
-            start_address: Starting Bitcoin address
-            end_address: Target Bitcoin address
+            start_address: Starting address
+            end_address: Target address
             max_hops: Maximum number of hops to traverse
+            chain: Chain identifier
 
         Returns:
             List of paths, where each path is a list of addresses
@@ -72,13 +76,15 @@ class Neo4jRepository(ABC):
         pass
 
     @abstractmethod
-    def get_transaction_history(self, address: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_transaction_history(self, address: str, limit: int = 100,
+                                chain: str = "btc") -> List[Dict[str, Any]]:
         """
         Get transaction history for an address from the graph.
 
         Args:
-            address: Bitcoin address
+            address: Blockchain address
             limit: Maximum number of transactions to return
+            chain: Chain identifier
 
         Returns:
             List of transaction dictionaries
@@ -100,7 +106,8 @@ class Neo4jRepository(ABC):
         pass
 
     @abstractmethod
-    def get_subgraph_edges(self, address: str, depth: int = 2, limit: int = 5000) -> List[Dict[str, Any]]:
+    def get_subgraph_edges(self, address: str, depth: int = 2, limit: int = 5000,
+                           chain: str = "btc") -> List[Dict[str, Any]]:
         """
         Get all edges in the subgraph around an address.
 
@@ -108,6 +115,7 @@ class Neo4jRepository(ABC):
             address: Root address
             depth: Traversal depth
             limit: Maximum edges
+            chain: Chain identifier
 
         Returns:
             List of edge dicts

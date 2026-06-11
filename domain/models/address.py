@@ -1,5 +1,5 @@
 """
-Domain model for a Bitcoin address.
+Domain model for a blockchain address (BTC, ETH, etc.).
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -8,7 +8,7 @@ from enum import Enum
 
 
 class EntityType(Enum):
-    """Types of Bitcoin entities."""
+    """Types of blockchain entities."""
     EXCHANGE = "exchange"
     MIXER = "mixer"
     MINING_POOL = "mining_pool"
@@ -25,9 +25,11 @@ class EntityType(Enum):
 
 @dataclass
 class Address:
-    """Bitcoin address domain model."""
+    """Blockchain address domain model (multi-chain)."""
     address: str
     wallet_id: Optional[str] = None
+    chain: str = "btc"
+    decimals: int = 8
     entity_type: EntityType = EntityType.UNKNOWN
     entity_confidence: float = 0.0
     labels: List[str] = field(default_factory=list)
@@ -39,22 +41,34 @@ class Address:
     balance_satoshis: int = 0
     is_contract: bool = False
     tags: List[str] = field(default_factory=list)
-    
+
+    @property
+    def total_received_native(self) -> float:
+        """Total received in native unit (BTC or ETH)."""
+        return self.total_received_satoshis / (10 ** self.decimals)
+
+    @property
+    def total_sent_native(self) -> float:
+        """Total sent in native unit (BTC or ETH)."""
+        return self.total_sent_satoshis / (10 ** self.decimals)
+
+    @property
+    def balance_native(self) -> float:
+        """Balance in native unit (BTC or ETH)."""
+        return self.balance_satoshis / (10 ** self.decimals)
+
     @property
     def total_received_btc(self) -> float:
-        """Total received in BTC."""
-        return self.total_received_satoshis / 100_000_000
-    
+        return self.total_received_native
+
     @property
     def total_sent_btc(self) -> float:
-        """Total sent in BTC."""
-        return self.total_sent_satoshis / 100_000_000
-    
+        return self.total_sent_native
+
     @property
     def balance_btc(self) -> float:
-        """Balance in BTC."""
-        return self.balance_satoshis / 100_000_000
-    
+        return self.balance_native
+
     @property
     def is_entity_known(self) -> bool:
         """Whether the entity type is known with reasonable confidence."""

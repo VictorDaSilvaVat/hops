@@ -35,6 +35,7 @@ TRACER_PARAMS = {
     "max_hops": int(os.environ.get("MAX_HOPS", "2")),
     "ai_provider": AI_PROVIDER,
     "ai_model": AI_MODEL,
+    "chain": "btc",
 }
 
 OLLAMA_MODEL = AI_MODEL
@@ -45,30 +46,37 @@ OLLAMA_MODEL = AI_MODEL
 def get_driver():
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
 
-def address_exists(addr):
+def address_exists(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
-        r = s.run("MATCH (a:Address {address:$a}) RETURN a LIMIT 1", a=addr).single()
+        r = s.run(
+            "MATCH (a:Address {address:$a, chain:$chain}) RETURN a LIMIT 1",
+            a=addr, chain=chain,
+        ).single()
     driver.close()
     return r is not None
 
-def address_has_relations(addr):
+def address_has_relations(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
-        r = s.run("MATCH (a:Address {address:$a})-[r:SENT]-() RETURN count(r) AS cnt", a=addr).single()
+        r = s.run(
+            "MATCH (a:Address {address:$a, chain:$chain})-[r:SENT]-() RETURN count(r) AS cnt",
+            a=addr, chain=chain,
+        ).single()
     driver.close()
     return r is not None and r["cnt"] > 0
 
-def fetch_subgraph(addr, depth=2, limit=5000):
+def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     driver = get_driver()
     depth_literal = f"*1..{depth}"
 
     q = f"""
-    MATCH (root:Address {{address:$addr}})
+    MATCH (root:Address {{address:$addr, chain:$chain}})
     MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
     UNWIND relationships(p) AS rel
     WITH DISTINCT rel
     MATCH (a:Address)-[rel]->(b:Address)
+    WHERE coalesce(a.chain, "btc") = $chain AND coalesce(b.chain, "btc") = $chain
     RETURN 
         a.address AS from_addr,
         b.address AS to_addr,
@@ -86,7 +94,7 @@ def fetch_subgraph(addr, depth=2, limit=5000):
 
     rows = []
     with driver.session() as s:
-        for rec in s.run(q, addr=addr, limit=limit):
+        for rec in s.run(q, addr=addr, limit=limit, chain=chain):
             row = dict(rec)
             # Ensure labels are lists
             if not isinstance(row.get('from_labels'), list):
@@ -218,11 +226,12 @@ def show_timeline(edges):
 # -------------------------
 # Panel de riesgo
 # -------------------------
-def show_risk(edges, root):
+def show_risk(edges, root, chain="btc"):
     if not edges:
         st.info("Sin datos para panel de riesgo.")
         return
 
+    unit = "ETH" if chain == "eth" else "BTC"
     df = pd.DataFrame(edges)
     df = df[df["amount"].notnull()]
     if df.empty:
@@ -235,15 +244,15 @@ def show_risk(edges, root):
     neighbors = pd.concat([df["from_addr"], df["to_addr"]]).nunique()
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total entrante", f"{total_in:.8f} BTC")
-    col2.metric("Total saliente", f"{total_out:.8f} BTC")
+    col1.metric("Total entrante", f"{total_in:.8f} {unit}")
+    col2.metric("Total saliente", f"{total_out:.8f} {unit}")
     col3.metric("Vecinos únicos", neighbors)
 
 # -------------------------
 # Dashboard principal
 # -------------------------
-def show_dashboard(addr, filters):
-    edges = fetch_subgraph(addr, depth=TRACER_PARAMS["max_hops"])
+def show_dashboard(addr, filters, chain="btc"):
+    edges = fetch_subgraph(addr, depth=TRACER_PARAMS["max_hops"], chain=chain)
 
     edges = [e for e in edges if "amount" in e and e["amount"] is not None]
 
@@ -310,7 +319,7 @@ def show_dashboard(addr, filters):
         st.dataframe(df[display_columns])
 
     with tabs[5]:
-        show_risk(edges, addr)
+        show_risk(edges, addr, chain=chain)
 
     # -------------------------
     # REPORTE IA (V2 - Enhanced)
@@ -408,7 +417,13 @@ def show_dashboard(addr, filters):
                                 mime="application/pdf",
                             )
                     else:
-                        st.warning("PDF no disponible (verificar dependencias)")
+                        pdf_error = result.get("pdf_error", "")
+                        msg = "PDF no disponible"
+                        if pdf_error:
+                            msg += f": {pdf_error}"
+                        else:
+                            msg += " (verificar dependencias)"
+                        st.warning(msg)
 
                 with col_b:
                     if html_path and os.path.exists(html_path):
@@ -467,8 +482,16 @@ def show_dashboard(addr, filters):
 # MAIN UI
 # -------------------------
 def main():
-    st.set_page_config(page_title="Dashboard Forense BTC", layout="wide")
-    st.title("Dashboard Forense BTC — Filtros avanzados + Reporte IA")
+    st.set_page_config(page_title="Dashboard Forense Multi-Chain", layout="wide")
+
+    # Sidebar chain selector
+    with st.sidebar:
+        chain = st.selectbox("Blockchain", ["BTC", "ETH"], index=0)
+        chain = chain.lower()
+        unit = "ETH" if chain == "eth" else "BTC"
+        TRACER_PARAMS["chain"] = chain
+
+    st.title(f"Dashboard Forense {unit.upper()} — Filtros avanzados + Reporte IA")
 
     # Initialize session state variables
     if "analysis_done" not in st.session_state:
@@ -481,9 +504,11 @@ def main():
         st.session_state.transaction_graph = None
     if "enhanced_report" not in st.session_state:
         st.session_state.enhanced_report = None
+    if "chain" not in st.session_state:
+        st.session_state.chain = chain
 
 
-    addr_input = st.text_input("Dirección BTC:", value=st.session_state.last_address or "")
+    addr_input = st.text_input(f"Dirección {unit.upper()}:", value=st.session_state.last_address or "")
     addr = addr_input.strip()
 
     st.markdown("### Filtros avanzados")
@@ -491,7 +516,7 @@ def main():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        min_amount = st.number_input("Monto mínimo (BTC)", min_value=0.0, value=0.00001, step=0.00001)
+        min_amount = st.number_input(f"Monto mínimo ({unit})", min_value=0.0, value=0.00001, step=0.00001, format="%.8f")
         only_hop1 = st.checkbox("Solo hop 1")
         hide_change = st.checkbox("Ocultar change outputs")
 
@@ -509,6 +534,7 @@ def main():
         "only_fanin": only_fanin,
         "only_fanout": only_fanout,
         "entity": entity,
+        "_chain": chain,
     }
 
     if st.button("Procesar"):
@@ -517,10 +543,11 @@ def main():
             return
 
         st.session_state.last_address = addr
+        st.session_state.chain = chain
         st.session_state.ai_report = None
 
         tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=min_amount)
-        if not address_has_relations(addr):
+        if not address_has_relations(addr, chain=chain):
             # Trace if address has no SENT relationships (fresh or stale node)
             tracer.trace(addr)
         # Always build summary and prepare for dashboard (whether from cache or fresh trace)
@@ -528,7 +555,7 @@ def main():
         st.session_state.analysis_done = True
 
     if st.session_state.analysis_done and st.session_state.last_address:
-        show_dashboard(st.session_state.last_address, filters)
+        show_dashboard(st.session_state.last_address, filters, chain=chain)
 
 if __name__ == "__main__":
     main()

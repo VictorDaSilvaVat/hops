@@ -1,6 +1,7 @@
 """
 Main Bitcoin forensics processing class - refactored to use hexagonal architecture.
 """
+import os
 import time
 import json
 import logging
@@ -24,6 +25,7 @@ from domain.services.reporting.forensic_report_generator import ForensicReportGe
 # Infrastructure adapters
 from infrastructure.adapters.blockstream_adapter import BlockstreamAdapter
 from infrastructure.adapters.wallet_explorer_adapter import WalletExplorerAdapter
+from infrastructure.adapters.etherscan_adapter import EtherscanAdapter
 from infrastructure.persistence.neo4j_adapter import Neo4jAdapter
 from infrastructure.reporting.forensic_report_adapter import ForensicReportAdapter
 
@@ -52,6 +54,7 @@ class BTCForensicsPro:
         verbose: bool = True,
         max_hops: int = 3,
         min_amount: float = 0.00001,
+        chain: str = "btc",
         config: Optional[Config] = None,
         case_id: Optional[str] = None,
         investigator: str = "HOPS System",
@@ -65,7 +68,7 @@ class BTCForensicsPro:
         report_generator=None
     ):
         """
-        Initialize the Bitcoin forensics processor.
+        Initialize the blockchain forensics processor (multi-chain).
 
         Args:
             neo4j_uri: Neo4j connection URI
@@ -74,6 +77,7 @@ class BTCForensicsPro:
             verbose: Enable verbose logging
             max_hops: Maximum number of hops to trace
             min_amount: Minimum transaction amount to consider (anti-dust filter)
+            chain: Chain identifier ("btc", "eth", etc.)
             config: Configuration object (optional)
             case_id: Case identifier for reporting (optional)
             investigator: Investigator name for reporting
@@ -91,6 +95,7 @@ class BTCForensicsPro:
         self.verbose = verbose
         self.max_hops = max_hops
         self.min_amount = min_amount  # FILTRO ANTI-DUST
+        self.chain = chain
         self.case_id = case_id
         self.investigator = investigator
         self.ai_provider = ai_provider
@@ -110,14 +115,22 @@ class BTCForensicsPro:
             password=neo4j_password
         )
         
-        self.blockchain_api = blockchain_api or BlockstreamAdapter()
-        self.wallet_api = wallet_api or WalletExplorerAdapter()
+        # Select blockchain API adapter based on chain
+        if chain == "eth":
+            eth_key = self.config.api.etherscan_api_key
+            self.blockchain_api = blockchain_api or EtherscanAdapter(api_key=eth_key)
+            self.wallet_api = wallet_api or WalletExplorerAdapter()
+        else:
+            self.blockchain_api = blockchain_api or BlockstreamAdapter()
+            self.wallet_api = wallet_api or WalletExplorerAdapter()
         
         # Initialize domain services
+        from domain.services.address_analyzer import AddressAnalyzerService
         self.address_analyzer = address_analyzer_service or AddressAnalyzerService(
             blockchain_api=self.blockchain_api,
             wallet_api=self.wallet_api,
-            min_amount_threshold=self.min_amount
+            min_amount_threshold=self.min_amount,
+            chain=self.chain,
         )
         
         self.cluster_analyzer = cluster_analyzer_service or ClusterAnalyzerService()
@@ -135,7 +148,7 @@ class BTCForensicsPro:
         # Analysis results storage
         self.last_analysis_results = {}
         
-        self.logger.info("BTCForensicsPro initialized with hexagonal architecture and Phase 3 enhancements")
+        self.logger.info(f"BTCForensicsPro initialized for chain={chain}")
 
     def close(self):
         """Close all connections and clean up resources."""
@@ -265,8 +278,8 @@ class BTCForensicsPro:
         """Get raw transaction data from the blockchain API."""
         try:
             # Get transaction history from Neo4j (which should have been populated by trace operations)
-            db_transactions = self.neo4j_repo.get_transaction_history(address, limit=1000)
-            
+            db_transactions = self.neo4j_repo.get_transaction_history(address, limit=1000, chain=self.chain)
+
             # Convert to standard format
             raw_transactions = []
             for tx in db_transactions:
@@ -454,10 +467,11 @@ class BTCForensicsPro:
     
     def trace(self, address: str, hop: int = 1, direction: str = "both"):
         """
-        Trace Bitcoin transactions from an address.
-        Maintained for backward compatibility.
+        Trace transactions from an address.
+        Dispatches to chain-specific implementation.
         """
-        # Delegate to the enhanced trace method from Phase 1/2
+        if self.chain == "eth":
+            return self._trace_ethereum(address, hop)
         return self._trace_legacy(address, hop, direction)
 
     def _trace_legacy(self, address: str, hop: int = 1, direction: str = "both"):
@@ -496,6 +510,21 @@ class BTCForensicsPro:
         # Analyze the address itself
         try:
             address_model = self.address_analyzer.analyze_address(address)
+            # WASS fallback: if WalletExplorer returned unknown, try identifications API
+            if address_model.entity_type == EntityType.UNKNOWN:
+                sanctions = self.check_sanctions(address)
+                idents = sanctions.get("identifications", [])
+                if idents:
+                    from domain.entity_recognizer import entity_recognizer
+                    profile = entity_recognizer.classify_from_identification(
+                        name=idents[0].get("name"),
+                        classification=idents[0].get("classification"),
+                        address=address,
+                    )
+                    if profile.entity_type != EntityType.UNKNOWN:
+                        address_model.entity_type = profile.entity_type
+                        address_model.entity_confidence = profile.confidence
+                        address_model.labels = list(set(list(address_model.labels) + profile.labels))
             # Save to Neo4j
             self.neo4j_repo.save_address(address_model)
         except Exception as e:
@@ -578,6 +607,7 @@ class BTCForensicsPro:
                 "block_time": block_time,
                 "is_change": is_change,
                 "hop": hop,
+                "chain": "btc",
             }
 
             # Save transaction to Neo4j
@@ -620,6 +650,7 @@ class BTCForensicsPro:
                     "block_time": block_time,
                     "is_change": False,  # Inputs are never change relative to the receiver
                     "hop": hop,
+                    "chain": "btc",
                 }
 
                 # Save transaction to Neo4j
@@ -653,6 +684,108 @@ class BTCForensicsPro:
             self.log("warning", f"Error determining change output: {e}")
             return False  # Default to not change on error
 
+    # ---------------------------------------------------------
+    # ETHEREUM TRACE
+    # ---------------------------------------------------------
+
+    def _trace_ethereum(self, address: str, hop: int = 1):
+        """Trace Ethereum transactions from an address via Etherscan API V2."""
+        if hop > self.max_hops:
+            return
+
+        key = f"eth-{address}-{hop}"
+        if key in self.processed_addresses:
+            return
+        self.processed_addresses.add(key)
+
+        try:
+            txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="eth")
+        except Exception as e:
+            self.log("error", f"Failed to get ETH transactions for {address}: {e}")
+            return
+
+        if not txs:
+            self.log("debug", f"No transactions found for ETH address {address}")
+            return
+
+        self.log("info", f"Found {len(txs)} ETH transactions for {address}")
+
+        # Analyze the address itself
+        try:
+            address_model = self.address_analyzer.analyze_address(address)
+            # For ETH, classify via WASS identifications (no WalletExplorer)
+            sanctions = self.check_sanctions(address)
+            idents = sanctions.get("identifications", [])
+            if idents:
+                from domain.entity_recognizer import entity_recognizer
+                profile = entity_recognizer.classify_from_identification(
+                    name=idents[0].get("name"),
+                    classification=idents[0].get("classification"),
+                    address=address,
+                )
+                if profile.entity_type != EntityType.UNKNOWN:
+                    address_model.entity_type = profile.entity_type
+                    address_model.entity_confidence = profile.confidence
+                    address_model.labels = list(set(list(address_model.labels) + profile.labels))
+            self.neo4j_repo.save_address(address_model)
+        except Exception as e:
+            self.log("error", f"Failed to analyze/save ETH address {address}: {e}")
+
+        for tx in txs:
+            txid = tx.get("txid") or tx.get("hash")
+            if not txid:
+                continue
+
+            from_addr = tx.get("from", "")
+            to_addr = tx.get("to", "")
+            value_wei = tx.get("value", 0)
+            amount_eth = float(value_wei) / 1e18
+            block_time = tx.get("timeStamp", 0)
+            tx_type = tx.get("tx_type", "normal")
+
+            if amount_eth < self.min_amount and tx_type == "normal":
+                continue
+
+            # FAN-OUT: address sends ETH
+            if from_addr == address and to_addr:
+                tx_payload = {
+                    "txid": txid,
+                    "from_address": address,
+                    "to_address": to_addr,
+                    "amount": amount_eth,
+                    "block_time": int(block_time),
+                    "is_change": False,
+                    "hop": hop,
+                    "chain": "eth",
+                }
+                try:
+                    self.neo4j_repo.save_transaction(**tx_payload)
+                except Exception as e:
+                    self.log("error", f"Failed to save ETH tx {txid}: {e}")
+
+                if tx_type == "normal":
+                    self.trace(to_addr, hop + 1, direction="fanout")
+
+            # FAN-IN: address receives ETH
+            if to_addr == address and from_addr:
+                tx_payload = {
+                    "txid": txid,
+                    "from_address": from_addr,
+                    "to_address": address,
+                    "amount": amount_eth,
+                    "block_time": int(block_time),
+                    "is_change": False,
+                    "hop": hop,
+                    "chain": "eth",
+                }
+                try:
+                    self.neo4j_repo.save_transaction(**tx_payload)
+                except Exception as e:
+                    self.log("error", f"Failed to save ETH tx {txid}: {e}")
+
+                if hop == 1:
+                    self.trace(from_addr, hop + 1, direction="fanin")
+
     def build_summary(self, address: str, limit: int = 200) -> str:
         """
         Build a textual summary of transactions for an address from Neo4j.
@@ -664,11 +797,11 @@ class BTCForensicsPro:
         Returns:
             Formatted summary string
         """
-        self.logger.info(f"Building summary for address {address}")
+        self.logger.info(f"Building summary for address {address} (chain={self.chain})")
         
         try:
             # Get transaction history from Neo4j
-            rows = self.neo4j_repo.get_transaction_history(address, limit=limit)
+            rows = self.neo4j_repo.get_transaction_history(address, limit=limit, chain=self.chain)
             
             if not rows:
                 return f"No se encontraron transacciones para {address}."
@@ -1013,7 +1146,7 @@ Informe forense:"""
             """)
             
             # Get transaction history from Neo4j
-            rows = self.neo4j_repo.get_transaction_history(address, limit=limit)
+            rows = self.neo4j_repo.get_transaction_history(address, limit=limit, chain=self.chain)
             
             if not rows:
                 return "<p>No se encontraron transacciones para generar el grafo.</p>"
@@ -1093,57 +1226,73 @@ Informe forense:"""
     # SANCTIONS API
     # ---------------------------------------------------------
 
-    SANCTIONS_API_URL = "https://wass.pasarelalabmoon.ddns.net/api/internal/screening/advanced"
+    SANCTIONS_API_URL = "https://wass.pasarelalabmoon.ddns.net/api/sanctions/crypto"
 
     def check_sanctions(self, address: str) -> Dict[str, Any]:
         """
-        Check if an address appears in sanctions lists.
+        Check if an address appears in sanctions lists and get entity identifications.
+
+        Uses the WASS API which supports both BTC and ETH addresses.
+        Returns sanctions matches and entity identifications.
 
         Args:
-            address: Bitcoin address to check
+            address: Blockchain address to check
 
         Returns:
-            Dict with sanctions info: sanctioned (bool), matches (list), network (str or None)
+            Dict with sanctions info, identifications, and classification
         """
-        import os
         internal_key = os.environ.get("SANCTIONS_INTERNAL_KEY", "")
-        payload = {"query": address, "types": ["crypto"]}
         headers = {
             "X-Internal-Key": internal_key,
-            "Content-Type": "application/json",
         }
         try:
-            resp = requests.post(self.SANCTIONS_API_URL, json=payload, headers=headers, timeout=15)
+            resp = requests.get(
+                self.SANCTIONS_API_URL,
+                params={"address": address},
+                headers=headers,
+                timeout=15,
+            )
             resp.raise_for_status()
             data = resp.json()
-            # Parse results array from the API
-            results = data.get("results", [])
-            sanctioned = False
-            all_matches = []
-            network = None
-            for r in results:
-                if r.get("match"):
-                    sanctioned = True
-                    for m in r.get("matches", []):
-                        all_matches.append(m)
-                        if not network:
-                            network = m.get("network")
-            self.log("info", f"Sanctions check for {address}: sanctioned={sanctioned}, matches={len(all_matches)}")
+
+            sanctioned = data.get("match", False)
+            matches = data.get("matches", [])
+            identifications = data.get("identifications", [])
+            total_matches = data.get("totalMatches", 0)
+
+            classification = None
+            entity_name = None
+            if identifications:
+                classification = identifications[0].get("classification")
+                entity_name = identifications[0].get("name")
+
+            self.log("info",
+                     f"Sanctions check for {address}: sanctioned={sanctioned}, "
+                     f"matches={len(matches)}, identifications={len(identifications)}")
             return {
                 "sanctioned": sanctioned,
-                "matches": all_matches,
-                "network": network,
+                "matches": matches,
+                "identifications": identifications,
+                "total_matches": total_matches,
                 "address": address,
+                "classification": classification,
+                "entity_name": entity_name,
             }
         except requests.exceptions.ConnectionError:
             self.log("warning", f"Sanctions API not reachable for {address}")
-            return {"sanctioned": None, "matches": [], "network": None, "address": address, "error": "API not reachable"}
+            return {"sanctioned": None, "matches": [], "identifications": [],
+                    "total_matches": 0, "address": address, "classification": None,
+                    "entity_name": None, "error": "API not reachable"}
         except requests.exceptions.Timeout:
             self.log("warning", f"Sanctions API timeout for {address}")
-            return {"sanctioned": None, "matches": [], "network": None, "address": address, "error": "Timeout"}
+            return {"sanctioned": None, "matches": [], "identifications": [],
+                    "total_matches": 0, "address": address, "classification": None,
+                    "entity_name": None, "error": "Timeout"}
         except Exception as e:
             self.log("error", f"Sanctions check error for {address}: {e}")
-            return {"sanctioned": None, "matches": [], "network": None, "address": address, "error": str(e)}
+            return {"sanctioned": None, "matches": [], "identifications": [],
+                    "total_matches": 0, "address": address, "classification": None,
+                    "entity_name": None, "error": str(e)}
 
     # ---------------------------------------------------------
     # ENHANCED REPORT METHODS (V2)
@@ -1155,7 +1304,7 @@ Informe forense:"""
         Returns list of transaction edge dicts for report generation.
         """
         try:
-            return self.neo4j_repo.get_subgraph_edges(address, depth=depth, limit=limit)
+            return self.neo4j_repo.get_subgraph_edges(address, depth=depth, limit=limit, chain=self.chain)
         except AttributeError:
             # Fallback: inline the query if the repo doesn't have the method
             pass
@@ -1415,7 +1564,7 @@ Informe forense:"""
         graph_html = self.generate_transaction_graph_html(address, limit=100)
 
         # 7. Generate complete report folder via EnhancedForensicReporter
-        reporter = EnhancedForensicReporter(output_dir="reports")
+        reporter = EnhancedForensicReporter(output_dir="reports", chain=self.chain)
         result = reporter.generate_report_folder(
             address=address,
             edges=edges,

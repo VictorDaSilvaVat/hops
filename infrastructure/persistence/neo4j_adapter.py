@@ -48,7 +48,9 @@ class Neo4jAdapter(Neo4jRepository):
                 
                 query = """
                 MERGE (a:Address {address: $address})
-                SET a.wallet_id = $wallet_id,
+                SET a.chain = $chain,
+                    a.decimals = $decimals,
+                    a.wallet_id = $wallet_id,
                     a.entity_type = $entity_type,
                     a.entity_confidence = $entity_confidence,
                     a.labels = $labels,
@@ -66,6 +68,8 @@ class Neo4jAdapter(Neo4jRepository):
                 
                 result = session.run(query, 
                                    address=address.address,
+                                   chain=address.chain,
+                                   decimals=address.decimals,
                                    wallet_id=address.wallet_id,
                                    entity_type=entity_type_str,
                                    entity_confidence=address.entity_confidence,
@@ -93,7 +97,7 @@ class Neo4jAdapter(Neo4jRepository):
 
     def save_transaction(self, txid: str, from_address: str, to_address: str,
                         amount: float, block_time: int, is_change: bool = False,
-                        hop: int = 1) -> bool:
+                        hop: int = 1, chain: str = "btc") -> bool:
         """
         Save a transaction relationship between addresses in Neo4j.
 
@@ -101,10 +105,11 @@ class Neo4jAdapter(Neo4jRepository):
             txid: Transaction ID
             from_address: Source address
             to_address: Destination address
-            amount: Transaction amount in BTC
+            amount: Transaction amount in native unit (BTC/ETH)
             block_time: Unix timestamp of block confirmation
             is_change: Whether this is a change output
             hop: Hop distance from the root address
+            chain: Chain identifier ("btc", "eth", etc.)
 
         Returns:
             True if successful, False otherwise
@@ -115,12 +120,14 @@ class Neo4jAdapter(Neo4jRepository):
                 // Ensure source address exists
                 MERGE (from:Address {address: $from_address})
                 ON CREATE SET 
+                    from.chain = $chain,
                     from.first_seen = datetime(),
                     from.updated_at = datetime()
                 
                 // Ensure destination address exists  
                 MERGE (to:Address {address: $to_address})
                 ON CREATE SET
+                    to.chain = $chain,
                     to.first_seen = datetime(),
                     to.updated_at = datetime()
                 
@@ -130,6 +137,7 @@ class Neo4jAdapter(Neo4jRepository):
                     r.block_time = $block_time,
                     r.is_change = $is_change,
                     r.hop = $hop,
+                    r.chain = $chain,
                     r.updated_at = datetime()
                 RETURN r.txid as txid
                 """
@@ -141,7 +149,8 @@ class Neo4jAdapter(Neo4jRepository):
                                    amount=amount,
                                    block_time=block_time,
                                    is_change=is_change,
-                                   hop=hop)
+                                   hop=hop,
+                                   chain=chain)
                 
                 record = result.single()
                 if record:
@@ -155,12 +164,13 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error saving transaction {txid} from {from_address} to {to_address}: {e}")
             return False
 
-    def get_address(self, address: str) -> Optional[Address]:
+    def get_address(self, address: str, chain: str = "btc") -> Optional[Address]:
         """
         Retrieve an address from the Neo4j graph database.
 
         Args:
-            address: Bitcoin address to retrieve
+            address: Blockchain address to retrieve
+            chain: Chain identifier
 
         Returns:
             Address domain model or None if not found
@@ -169,7 +179,10 @@ class Neo4jAdapter(Neo4jRepository):
             with self.driver.session() as session:
                 query = """
                 MATCH (a:Address {address: $address})
+                WHERE a.chain IS NULL OR a.chain = $chain
                 RETURN a.address as address,
+                       a.chain as chain,
+                       a.decimals as decimals,
                        a.wallet_id as wallet_id,
                        a.entity_type as entity_type,
                        a.entity_confidence as entity_confidence,
@@ -205,8 +218,12 @@ class Neo4jAdapter(Neo4jRepository):
                     if hasattr(last_seen, 'to_native'):
                         last_seen = last_seen.to_native()
                     
+                    chain_val = record.get("chain") or "btc"
+                    decimals_val = record.get("decimals") or (18 if chain_val == "eth" else 8)
                     addr = Address(
                         address=record["address"],
+                        chain=chain_val,
+                        decimals=decimals_val,
                         wallet_id=record["wallet_id"],
                         entity_type=entity_type,
                         entity_confidence=record["entity_confidence"] or 0.0,
@@ -231,14 +248,16 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error retrieving address {address} from Neo4j: {e}")
             return None
 
-    def find_path(self, start_address: str, end_address: str, max_hops: int = 5) -> List[List[str]]:
+    def find_path(self, start_address: str, end_address: str, max_hops: int = 5,
+                  chain: str = "btc") -> List[List[str]]:
         """
         Find all paths between two addresses within max_hops.
 
         Args:
-            start_address: Starting Bitcoin address
-            end_address: Target Bitcoin address
+            start_address: Starting address
+            end_address: Target address
             max_hops: Maximum number of hops to traverse
+            chain: Chain identifier
 
         Returns:
             List of paths, where each path is a list of addresses
@@ -249,11 +268,12 @@ class Neo4jAdapter(Neo4jRepository):
                 query = f"""
                 MATCH path = (from:Address {{address: $start_address}})-[r:SENT*1..{max_hops}]-(to:Address {{address: $end_address}})
                 WHERE NONE(x IN relationships(path) WHERE x.is_change = true)
+                  AND ALL(x IN relationships(path) WHERE x.chain IS NULL OR x.chain = $chain)
                 RETURN [n IN nodes(path) | n.address] as path
                 LIMIT 100
                 """
                 
-                result = session.run(query, start_address=start_address, end_address=end_address)
+                result = session.run(query, start_address=start_address, end_address=end_address, chain=chain)
                 paths = []
                 
                 for record in result:
@@ -268,13 +288,15 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error finding paths from {start_address} to {end_address}: {e}")
             return []
 
-    def get_transaction_history(self, address: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_transaction_history(self, address: str, limit: int = 100,
+                                chain: str = "btc") -> List[Dict[str, Any]]:
         """
         Get transaction history for an address from the graph.
 
         Args:
-            address: Bitcoin address
+            address: Blockchain address
             limit: Maximum number of transactions to return
+            chain: Chain identifier
 
         Returns:
             List of transaction dictionaries
@@ -283,17 +305,19 @@ class Neo4jAdapter(Neo4jRepository):
             with self.driver.session() as session:
                 query = """
                 MATCH (target:Address {address: $address})-[r:SENT]-(connected:Address)
+                WHERE r.chain IS NULL OR r.chain = $chain
                 RETURN r.txid as txid,
                        r.amount as amount,
                        r.block_time as block_time,
                        r.is_change as is_change,
+                       r.chain as chain,
                        endNode(r).address AS to_address,
                        startNode(r).address AS from_address
                 ORDER BY r.block_time DESC
                 LIMIT $limit
                 """
                 
-                result = session.run(query, address=address, limit=limit)
+                result = session.run(query, address=address, limit=limit, chain=chain)
                 transactions = []
                 
                 for record in result:
@@ -307,6 +331,7 @@ class Neo4jAdapter(Neo4jRepository):
                         "amount": record["amount"],
                         "block_time": int(block_time) if block_time else 0,
                         "is_change": record["is_change"],
+                        "chain": record.get("chain") or "btc",
                         "to_address": record["to_address"],
                         "from_address": record["from_address"]
                     }
@@ -338,7 +363,8 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error running query: {e}")
             return []
 
-    def get_subgraph_edges(self, address: str, depth: int = 2, limit: int = 5000) -> List[Dict[str, Any]]:
+    def get_subgraph_edges(self, address: str, depth: int = 2, limit: int = 5000,
+                           chain: str = "btc") -> List[Dict[str, Any]]:
         """
         Get all edges (transactions) in the subgraph around an address.
 
@@ -346,6 +372,7 @@ class Neo4jAdapter(Neo4jRepository):
             address: Root address
             depth: Traversal depth
             limit: Maximum edges to return
+            chain: Chain identifier
 
         Returns:
             List of edge dicts with from_addr, to_addr, amount, txid, etc.
@@ -354,6 +381,7 @@ class Neo4jAdapter(Neo4jRepository):
         query = f"""
         MATCH (root:Address {{address:$addr}})
         MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
+        WHERE ALL(rel IN relationships(p) WHERE rel.chain IS NULL OR rel.chain = $chain)
         UNWIND relationships(p) AS rel
         WITH DISTINCT rel
         MATCH (a:Address)-[rel]->(b:Address)
@@ -368,12 +396,13 @@ class Neo4jAdapter(Neo4jRepository):
             a.entity_type AS from_entity,
             b.entity_type AS to_entity,
             a.labels AS from_labels,
-            b.labels AS to_labels
+            b.labels AS to_labels,
+            coalesce(rel.chain, 'btc') AS chain
         LIMIT $limit
         """
         rows = []
         try:
-            recs = self.run_query(query, addr=address, limit=limit)
+            recs = self.run_query(query, addr=address, limit=limit, chain=chain)
             for rec in recs:
                 row = dict(rec)
                 if not isinstance(row.get('from_labels'), list):

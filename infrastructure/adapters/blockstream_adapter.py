@@ -19,16 +19,7 @@ class BlockstreamAdapter(BlockchainAPI):
         self.client = blockstream_client or BlockstreamClient()
         self.logger = logger
 
-    def get_address_info(self, address: str) -> Optional[Dict[str, Any]]:
-        """
-        Get information about a Bitcoin address from Blockstream.
-
-        Args:
-            address: Bitcoin address string
-
-        Returns:
-            Dictionary with address information or None if not found/error
-        """
+    def get_address_info(self, address: str, chain: str = "btc") -> Optional[Dict[str, Any]]:
         try:
             self.logger.debug(f"Getting address info for {address} from Blockstream")
             return self.client.get_address_info(address)
@@ -36,16 +27,7 @@ class BlockstreamAdapter(BlockchainAPI):
             self.logger.error(f"Error getting address info from Blockstream for {address}: {e}")
             return None
 
-    def get_transaction(self, txid: str) -> Optional[Dict[str, Any]]:
-        """
-        Get a transaction by its ID from Blockstream.
-
-        Args:
-            txid: Transaction ID
-
-        Returns:
-            Dictionary with transaction data or None if not found/error
-        """
+    def get_transaction(self, txid: str, chain: str = "btc") -> Optional[Dict[str, Any]]:
         try:
             self.logger.debug(f"Getting transaction {txid} from Blockstream")
             return self.client.get_tx(txid)
@@ -61,16 +43,7 @@ class BlockstreamAdapter(BlockchainAPI):
             self.logger.error(f"Error getting transaction {txid} from Blockstream: {e}")
             return None
 
-    def get_transaction_inputs(self, txid: str) -> List[Dict[str, Any]]:
-        """
-        Get inputs for a transaction from Blockstream.
-
-        Args:
-            txid: Transaction ID
-
-        Returns:
-            List of input dictionaries
-        """
+    def get_transaction_inputs(self, txid: str, chain: str = "btc") -> List[Dict[str, Any]]:
         try:
             self.logger.debug(f"Getting transaction inputs for {txid} from Blockstream")
             return self.client.get_tx_inputs(txid)
@@ -78,16 +51,7 @@ class BlockstreamAdapter(BlockchainAPI):
             self.logger.error(f"Error getting transaction inputs for {txid} from Blockstream: {e}")
             return []
 
-    def get_transaction_outputs(self, txid: str) -> List[Dict[str, Any]]:
-        """
-        Get outputs for a transaction from Blockstream.
-
-        Args:
-            txid: Transaction ID
-
-        Returns:
-            List of output dictionaries
-        """
+    def get_transaction_outputs(self, txid: str, chain: str = "btc") -> List[Dict[str, Any]]:
         try:
             self.logger.debug(f"Getting transaction outputs for {txid} from Blockstream")
             return self.client.get_tx_outputs(txid)
@@ -95,17 +59,8 @@ class BlockstreamAdapter(BlockchainAPI):
             self.logger.error(f"Error getting transaction outputs for {txid} from Blockstream: {e}")
             return []
 
-    def get_address_transactions(self, address: str, limit: int = 200) -> List[Dict[str, Any]]:
-        """
-        Get transactions for an address from Blockstream.
-
-        Args:
-            address: Bitcoin address
-            limit: Maximum number of transactions to return
-
-        Returns:
-            List of transaction dictionaries
-        """
+    def get_address_transactions(self, address: str, limit: int = 200,
+                                 chain: str = "btc") -> List[Dict[str, Any]]:
         try:
             self.logger.debug("Getting address transactions for %s from Blockstream (limit: %s)", address, limit)
             return self.client.get_address_txs(address, limit=limit)
