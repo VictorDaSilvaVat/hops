@@ -92,7 +92,8 @@ class Neo4jAdapter(Neo4jRepository):
             return False
 
     def save_transaction(self, txid: str, from_address: str, to_address: str,
-                        amount: float, block_time: int, is_change: bool = False) -> bool:
+                        amount: float, block_time: int, is_change: bool = False,
+                        hop: int = 1) -> bool:
         """
         Save a transaction relationship between addresses in Neo4j.
 
@@ -103,6 +104,7 @@ class Neo4jAdapter(Neo4jRepository):
             amount: Transaction amount in BTC
             block_time: Unix timestamp of block confirmation
             is_change: Whether this is a change output
+            hop: Hop distance from the root address
 
         Returns:
             True if successful, False otherwise
@@ -127,6 +129,7 @@ class Neo4jAdapter(Neo4jRepository):
                 SET r.amount = $amount,
                     r.block_time = $block_time,
                     r.is_change = $is_change,
+                    r.hop = $hop,
                     r.updated_at = datetime()
                 RETURN r.txid as txid
                 """
@@ -137,7 +140,8 @@ class Neo4jAdapter(Neo4jRepository):
                                    txid=txid,
                                    amount=amount,
                                    block_time=block_time,
-                                   is_change=is_change)
+                                   is_change=is_change,
+                                   hop=hop)
                 
                 record = result.single()
                 if record:

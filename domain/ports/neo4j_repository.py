@@ -24,7 +24,8 @@ class Neo4jRepository(ABC):
 
     @abstractmethod
     def save_transaction(self, txid: str, from_address: str, to_address: str,
-                        amount: float, block_time: int, is_change: bool = False) -> bool:
+                        amount: float, block_time: int, is_change: bool = False,
+                        hop: int = 1) -> bool:
         """
         Save a transaction relationship between addresses.
 
@@ -35,6 +36,7 @@ class Neo4jRepository(ABC):
             amount: Transaction amount in BTC
             block_time: Unix timestamp of block confirmation
             is_change: Whether this is a change output
+            hop: Hop distance from the root address
 
         Returns:
             True if successful, False otherwise

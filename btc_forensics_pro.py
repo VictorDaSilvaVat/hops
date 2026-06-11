@@ -529,6 +529,7 @@ class BTCForensicsPro:
                         outputs=outputs,
                         block_time=block_time,
                         hop=hop,
+                        txid=txid,
                         direction="fanout"
                     )
 
@@ -540,6 +541,7 @@ class BTCForensicsPro:
                         outputs=outputs,
                         block_time=block_time,
                         hop=hop,
+                        txid=txid,
                         direction="fanin"
                     )
 
@@ -551,7 +553,7 @@ class BTCForensicsPro:
                 continue
 
     def _process_outputs(self, address: str, inputs: List, outputs: List, 
-                        block_time: int, hop: int, direction: str):
+                        block_time: int, hop: int, txid: str, direction: str):
         """Process transaction outputs when address is the sender."""
         for vout in outputs:
             dest = vout.get("scriptpubkey_address")
@@ -569,12 +571,13 @@ class BTCForensicsPro:
 
             # Create transaction data for persistence
             tx_payload = {
-                "txid": vout.get("txid", ""),
+                "txid": txid,
                 "from_address": address,
                 "to_address": dest,
                 "amount": amount,
                 "block_time": block_time,
-                "is_change": is_change
+                "is_change": is_change,
+                "hop": hop,
             }
 
             # Save transaction to Neo4j
@@ -588,7 +591,7 @@ class BTCForensicsPro:
                 self.trace(dest, hop + 1, direction="fanout")
 
     def _process_inputs(self, address: str, inputs: List, outputs: List,
-                       block_time: int, hop: int, direction: str):
+                       block_time: int, hop: int, txid: str, direction: str):
         """Process transaction inputs when address is the receiver."""
         for vout in outputs:
             # Only process outputs that belong to our address
@@ -610,12 +613,13 @@ class BTCForensicsPro:
 
                 # Create transaction data for persistence
                 tx_payload = {
-                    "txid": vin.get("txid", ""),
+                    "txid": txid,
                     "from_address": src,
                     "to_address": address,
                     "amount": amount,
                     "block_time": block_time,
-                    "is_change": False  # Inputs are never change relative to the receiver
+                    "is_change": False,  # Inputs are never change relative to the receiver
+                    "hop": hop,
                 }
 
                 # Save transaction to Neo4j
@@ -773,7 +777,8 @@ class BTCForensicsPro:
                 to_address=tx_info.get("to_addr", ""),
                 amount=tx_info.get("amount", 0.0),
                 block_time=int(tx_info.get("time", 0)),
-                is_change=tx_info.get("is_change", False)
+                is_change=tx_info.get("is_change", False),
+                hop=int(tx_info.get("hop", 1))
             )
         except Exception as e:
             self.log("error", f"Failed to save to graph: {e}")

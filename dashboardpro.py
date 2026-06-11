@@ -52,6 +52,13 @@ def address_exists(addr):
     driver.close()
     return r is not None
 
+def address_has_relations(addr):
+    driver = get_driver()
+    with driver.session() as s:
+        r = s.run("MATCH (a:Address {address:$a})-[r:SENT]-() RETURN count(r) AS cnt", a=addr).single()
+    driver.close()
+    return r is not None and r["cnt"] > 0
+
 def fetch_subgraph(addr, depth=2, limit=5000):
     driver = get_driver()
     depth_literal = f"*1..{depth}"
@@ -513,8 +520,8 @@ def main():
         st.session_state.ai_report = None
 
         tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=min_amount)
-        if not address_exists(addr):
-            # Only trace if address doesn't exist in Neo4j (fresh analysis)
+        if not address_has_relations(addr):
+            # Trace if address has no SENT relationships (fresh or stale node)
             tracer.trace(addr)
         # Always build summary and prepare for dashboard (whether from cache or fresh trace)
         tracer.close()
