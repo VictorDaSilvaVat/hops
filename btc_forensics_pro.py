@@ -730,7 +730,7 @@ class BTCForensicsPro:
             block_time = tx.get("timeStamp", 0)
             tx_type = tx.get("tx_type", "normal")
 
-            if amount_eth < self.min_amount and tx_type == "normal":
+            if amount_eth < self.min_amount and tx_type == "normal" and amount_eth > 0:
                 continue
 
             # FAN-OUT: address sends ETH

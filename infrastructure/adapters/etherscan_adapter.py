@@ -73,11 +73,18 @@ class EtherscanAdapter(BlockchainAPI):
             internal = self.client.get_address_internal_txs(address, limit=limit)
             erc20 = self.client.get_address_erc20_txs(address, limit=limit)
 
-            # Log Etherscan API errors for debugging
+            # Detect Etherscan API errors (e.g., missing/invalid API key returns string result)
             for label, resp in [("normal", normal), ("internal", internal), ("erc20", erc20)]:
-                if resp and resp.get("status") == "0":
+                if resp and isinstance(resp.get("result"), str):
+                    err_msg = resp["result"]
+                    self.logger.error(
+                        f"Etherscan {label} API error for {address}: {resp.get('message', '')} — {err_msg}"
+                    )
+                    # Raise to propagate the error to the trace method
+                    raise RuntimeError(f"Etherscan {label} API error: {err_msg}")
+                if resp and resp.get("status") == "0" and isinstance(resp.get("result"), list):
                     self.logger.warning(
-                        f"Etherscan {label} API error for {address}: {resp.get('message', '')} — {resp.get('result', '')}"
+                        f"Etherscan {label} returned no data for {address}: {resp.get('message', '')}"
                     )
 
             result = []
