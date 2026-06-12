@@ -197,7 +197,7 @@ class Neo4jAdapter(Neo4jRepository):
                        a.tags as tags
                 """
                 
-                result = session.run(query, address=address)
+                result = session.run(query, address=address, chain=chain)
                 record = result.single()
                 
                 if record:

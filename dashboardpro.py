@@ -50,7 +50,7 @@ def address_exists(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
         r = s.run(
-            "MATCH (a:Address {address:$a, chain:$chain}) RETURN a LIMIT 1",
+            "MATCH (a:Address {address:$a}) WHERE coalesce(a.chain, \"btc\") = $chain RETURN a LIMIT 1",
             a=addr, chain=chain,
         ).single()
     driver.close()
@@ -60,7 +60,7 @@ def address_has_relations(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
         r = s.run(
-            "MATCH (a:Address {address:$a, chain:$chain})-[r:SENT]-() RETURN count(r) AS cnt",
+            "MATCH (a:Address {address:$a}) WHERE coalesce(a.chain, \"btc\") = $chain MATCH (a)-[r:SENT]-() RETURN count(r) AS cnt",
             a=addr, chain=chain,
         ).single()
     driver.close()
@@ -71,7 +71,8 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     depth_literal = f"*1..{depth}"
 
     q = f"""
-    MATCH (root:Address {{address:$addr, chain:$chain}})
+    MATCH (root:Address {{address:$addr}})
+    WHERE coalesce(root.chain, "btc") = $chain
     MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
     UNWIND relationships(p) AS rel
     WITH DISTINCT rel
@@ -548,9 +549,11 @@ def main():
 
         tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=min_amount)
         if not address_has_relations(addr, chain=chain):
-            # Trace if address has no SENT relationships (fresh or stale node)
-            tracer.trace(addr)
-        # Always build summary and prepare for dashboard (whether from cache or fresh trace)
+            ok = tracer.trace(addr)
+            if not ok:
+                st.error(f"No se pudieron obtener transacciones para {addr} en {unit.upper()}. Verifica que la dirección sea válida y que las claves de API estén configuradas (ETHERSCAN_API_KEY para ETH).")
+                tracer.close()
+                return
         tracer.close()
         st.session_state.analysis_done = True
 

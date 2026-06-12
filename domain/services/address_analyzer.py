@@ -1,7 +1,7 @@
 """
 Service for analyzing blockchain addresses (multi-chain).
 """
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Callable
 from datetime import datetime
 import logging
 
@@ -22,12 +22,34 @@ class AddressAnalyzerService:
         wallet_api: WalletAPI,
         min_amount_threshold: float = 0.00001,
         chain: str = "btc",
+        sanctions_checker: Optional[Callable[[str], Dict[str, Any]]] = None,
     ):
         self.blockchain_api = blockchain_api
         self.wallet_api = wallet_api
         self.min_amount_threshold = min_amount_threshold
         self.chain = chain
+        self.sanctions_checker = sanctions_checker
         self.logger = logging.getLogger(__name__)
+
+    def _apply_wass_fallback(self, addr_model: Address, address: str) -> None:
+        """If entity is UNKNOWN, try WASS API for identification."""
+        if addr_model.entity_type != EntityType.UNKNOWN or not self.sanctions_checker:
+            return
+        try:
+            sanctions = self.sanctions_checker(address)
+            idents = sanctions.get("identifications", [])
+            if idents:
+                profile = entity_recognizer.classify_from_identification(
+                    name=idents[0].get("name"),
+                    classification=idents[0].get("classification"),
+                    address=address,
+                )
+                if profile.entity_type != EntityType.UNKNOWN:
+                    addr_model.entity_type = profile.entity_type
+                    addr_model.entity_confidence = profile.confidence
+                    addr_model.labels = list(set(list(addr_model.labels) + profile.labels))
+        except Exception as e:
+            self.logger.debug(f"WASS fallback failed for {address}: {e}")
 
     def analyze_address(self, address: str) -> Address:
         """
@@ -107,6 +129,9 @@ class AddressAnalyzerService:
                 addr_model.first_seen = datetime.fromtimestamp(address_info["first_seen"])
             if "last_seen" in address_info:
                 addr_model.last_seen = datetime.fromtimestamp(address_info["last_seen"])
+
+        # WASS API fallback for entity classification (both BTC and ETH)
+        self._apply_wass_fallback(addr_model, address)
 
         self.logger.info(
             f"Address analysis complete for {address}: "

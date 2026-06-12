@@ -20,7 +20,16 @@ class EtherscanAdapter(BlockchainAPI):
     def get_address_info(self, address: str, chain: str = "eth") -> Optional[Dict[str, Any]]:
         try:
             balance_resp = self.client.get_balance(address)
-            balance = int(balance_resp.get("result", 0)) if balance_resp else 0
+            balance = 0
+            if balance_resp and balance_resp.get("status") == "1":
+                try:
+                    balance = int(balance_resp.get("result", 0))
+                except (ValueError, TypeError):
+                    balance = 0
+            elif balance_resp and balance_resp.get("status") == "0":
+                self.logger.warning(
+                    f"Etherscan balance API error for {address}: {balance_resp.get('message', '')}"
+                )
             tx_resp = self.client.get_address_txs(address)
             tx_count = 0
             if tx_resp and isinstance(tx_resp.get("result"), list):
@@ -63,6 +72,13 @@ class EtherscanAdapter(BlockchainAPI):
             internal = self.client.get_address_internal_txs(address, limit=limit)
             erc20 = self.client.get_address_erc20_txs(address, limit=limit)
 
+            # Log Etherscan API errors for debugging
+            for label, resp in [("normal", normal), ("internal", internal), ("erc20", erc20)]:
+                if resp and resp.get("status") == "0":
+                    self.logger.warning(
+                        f"Etherscan {label} API error for {address}: {resp.get('message', '')} — {resp.get('result', '')}"
+                    )
+
             result = []
             # Normal transactions
             if normal and isinstance(normal.get("result"), list):
@@ -103,6 +119,7 @@ class EtherscanAdapter(BlockchainAPI):
 
         if tx_type == "erc20":
             base.update({
+                "value": 0,  # ERC20 transfers don't move ETH
                 "tokenSymbol": tx.get("tokenSymbol", ""),
                 "tokenName": tx.get("tokenName", ""),
                 "tokenDecimal": int(tx.get("tokenDecimal", 18)),

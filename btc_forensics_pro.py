@@ -125,12 +125,12 @@ class BTCForensicsPro:
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         
         # Initialize domain services
-        from domain.services.address_analyzer import AddressAnalyzerService
         self.address_analyzer = address_analyzer_service or AddressAnalyzerService(
             blockchain_api=self.blockchain_api,
             wallet_api=self.wallet_api,
             min_amount_threshold=self.min_amount,
             chain=self.chain,
+            sanctions_checker=self.check_sanctions,
         )
         
         self.cluster_analyzer = cluster_analyzer_service or ClusterAnalyzerService()
@@ -465,31 +465,34 @@ class BTCForensicsPro:
     # LEGACY COMPATIBILITY METHODS (maintained for backward compatibility)
     # ---------------------------------------------------------
     
-    def trace(self, address: str, hop: int = 1, direction: str = "both"):
+    def trace(self, address: str, hop: int = 1, direction: str = "both") -> bool:
         """
         Trace transactions from an address.
         Dispatches to chain-specific implementation.
+        Returns True if any data was saved.
         """
         if self.chain == "eth":
             return self._trace_ethereum(address, hop)
         return self._trace_legacy(address, hop, direction)
 
-    def _trace_legacy(self, address: str, hop: int = 1, direction: str = "both"):
-        """Legacy trace implementation from Phase 2."""
+    def _trace_legacy(self, address: str, hop: int = 1, direction: str = "both") -> bool:
+        """Legacy trace implementation from Phase 2.
+        Returns True if any data was saved to Neo4j.
+        """
         self.logger.debug(f"Tracing address {address} at hop {hop}, direction {direction}")
 
         # FAN-IN solo permite 1 hop
         if direction == "fanin" and hop > 1:
-            return
+            return False
 
         # FAN-OUT permite hasta max_hops
         if direction == "fanout" and hop > self.max_hops:
-            return
+            return False
 
         # Evitar loops
         key = f"{address}-{direction}-{hop}"
         if key in self.processed_addresses:
-            return
+            return True
         self.processed_addresses.add(key)
 
         try:
@@ -497,35 +500,19 @@ class BTCForensicsPro:
             txs = self.blockchain_api.get_address_transactions(address, limit=200)
         except (APIError, NetworkError) as e:
             self.log("error", f"Failed to get transactions for address {address}: {e}")
-            return
+            return False
         except Exception as e:
             self.log("error", f"Unexpected error getting transactions for {address}: {e}")
-            return
+            return False
         
         if not txs:
             self.log("debug", f"No transactions found for address {address}")
-            return
+            return False
         self.log("info", f"Found {len(txs)} transactions for address {address}")
 
-        # Analyze the address itself
+        # Analyze and save the address (WASS fallback handled inside analyze_address)
         try:
             address_model = self.address_analyzer.analyze_address(address)
-            # WASS fallback: if WalletExplorer returned unknown, try identifications API
-            if address_model.entity_type == EntityType.UNKNOWN:
-                sanctions = self.check_sanctions(address)
-                idents = sanctions.get("identifications", [])
-                if idents:
-                    from domain.entity_recognizer import entity_recognizer
-                    profile = entity_recognizer.classify_from_identification(
-                        name=idents[0].get("name"),
-                        classification=idents[0].get("classification"),
-                        address=address,
-                    )
-                    if profile.entity_type != EntityType.UNKNOWN:
-                        address_model.entity_type = profile.entity_type
-                        address_model.entity_confidence = profile.confidence
-                        address_model.labels = list(set(list(address_model.labels) + profile.labels))
-            # Save to Neo4j
             self.neo4j_repo.save_address(address_model)
         except Exception as e:
             self.log("error", f"Failed to analyze/save address {address}: {e}")
@@ -688,45 +675,33 @@ class BTCForensicsPro:
     # ETHEREUM TRACE
     # ---------------------------------------------------------
 
-    def _trace_ethereum(self, address: str, hop: int = 1):
-        """Trace Ethereum transactions from an address via Etherscan API V2."""
+    def _trace_ethereum(self, address: str, hop: int = 1) -> bool:
+        """Trace Ethereum transactions from an address via Etherscan API V2.
+        Returns True if any data was saved to Neo4j.
+        """
         if hop > self.max_hops:
-            return
+            return False
 
         key = f"eth-{address}-{hop}"
         if key in self.processed_addresses:
-            return
+            return True
         self.processed_addresses.add(key)
 
         try:
             txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="eth")
         except Exception as e:
             self.log("error", f"Failed to get ETH transactions for {address}: {e}")
-            return
+            return False
 
         if not txs:
             self.log("debug", f"No transactions found for ETH address {address}")
-            return
+            return False
 
         self.log("info", f"Found {len(txs)} ETH transactions for {address}")
 
-        # Analyze the address itself
+        # Analyze and save the address (WASS fallback handled inside analyze_address)
         try:
             address_model = self.address_analyzer.analyze_address(address)
-            # For ETH, classify via WASS identifications (no WalletExplorer)
-            sanctions = self.check_sanctions(address)
-            idents = sanctions.get("identifications", [])
-            if idents:
-                from domain.entity_recognizer import entity_recognizer
-                profile = entity_recognizer.classify_from_identification(
-                    name=idents[0].get("name"),
-                    classification=idents[0].get("classification"),
-                    address=address,
-                )
-                if profile.entity_type != EntityType.UNKNOWN:
-                    address_model.entity_type = profile.entity_type
-                    address_model.entity_confidence = profile.confidence
-                    address_model.labels = list(set(list(address_model.labels) + profile.labels))
             self.neo4j_repo.save_address(address_model)
         except Exception as e:
             self.log("error", f"Failed to analyze/save ETH address {address}: {e}")
@@ -785,6 +760,8 @@ class BTCForensicsPro:
 
                 if hop == 1:
                     self.trace(from_addr, hop + 1, direction="fanin")
+
+        return True
 
     def build_summary(self, address: str, limit: int = 200) -> str:
         """
