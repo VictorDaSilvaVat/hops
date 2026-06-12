@@ -27,29 +27,30 @@ class EtherscanClient(BaseAPIClient):
 
     def get_address_txs(self, address, chainid=1, limit=200):
         return self._call({
-            "chainid": chainid, "action": "txlist",
+            "chainid": chainid, "module": "account", "action": "txlist",
             "address": address, "sort": "desc", "offset": 0, "limit": limit,
         })
 
     def get_address_internal_txs(self, address, chainid=1, limit=200):
         return self._call({
-            "chainid": chainid, "action": "txlistinternal",
+            "chainid": chainid, "module": "account", "action": "txlistinternal",
             "address": address, "sort": "desc", "offset": 0, "limit": limit,
         })
 
     def get_address_erc20_txs(self, address, chainid=1, limit=200):
         return self._call({
-            "chainid": chainid, "action": "tokentx",
+            "chainid": chainid, "module": "account", "action": "tokentx",
             "address": address, "sort": "desc", "offset": 0, "limit": limit,
         })
 
     def get_balance(self, address, chainid=1):
         return self._call({
-            "chainid": chainid, "action": "balance", "address": address,
+            "chainid": chainid, "module": "account", "action": "balance",
+            "address": address,
         })
 
     def get_token_balances(self, address, chainid=1):
         return self._call({
-            "chainid": chainid, "action": "addresstokenbalance",
+            "chainid": chainid, "module": "account", "action": "addresstokenbalance",
             "address": address,
         })

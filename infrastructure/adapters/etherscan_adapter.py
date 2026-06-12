@@ -52,7 +52,8 @@ class EtherscanAdapter(BlockchainAPI):
     def get_transaction(self, txid: str, chain: str = "eth") -> Optional[Dict[str, Any]]:
         try:
             resp = self.client._call({
-                "chainid": 1, "action": "gettxreceipt", "txhash": txid,
+                "chainid": 1, "module": "proxy", "action": "eth_getTransactionByHash",
+                "txhash": txid,
             })
             return resp
         except Exception as e:
