@@ -551,7 +551,12 @@ def main():
         if not address_has_relations(addr, chain=chain):
             ok = tracer.trace(addr)
             if not ok:
-                st.error(f"No se pudieron obtener transacciones para {addr} en {unit.upper()}. Verifica que la dirección sea válida y que las claves de API estén configuradas (ETHERSCAN_API_KEY para ETH).")
+                detail = getattr(tracer, '_last_trace_error', '')
+                msg = f"No se pudieron obtener transacciones para {addr} en {unit.upper()}."
+                if detail:
+                    msg += f"\n\nDetalle: {detail}"
+                msg += "\n\nVerifica que la dirección sea válida y que ETHERSCAN_API_KEY esté configurada."
+                st.error(msg)
                 tracer.close()
                 return
         tracer.close()

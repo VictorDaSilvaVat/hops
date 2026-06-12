@@ -97,6 +97,7 @@ class BTCForensicsPro:
         self.min_amount = min_amount  # FILTRO ANTI-DUST
         self.chain = chain
         self.case_id = case_id
+        self._last_trace_error = ""
         self.investigator = investigator
         self.ai_provider = ai_provider
         self.ai_model = ai_model or ("llama3" if ai_provider == "ollama" else "google/gemini-2.0-flash-001")
@@ -471,9 +472,15 @@ class BTCForensicsPro:
         Dispatches to chain-specific implementation.
         Returns True if any data was saved.
         """
-        if self.chain == "eth":
-            return self._trace_ethereum(address, hop)
-        return self._trace_legacy(address, hop, direction)
+        self._last_trace_error = ""
+        try:
+            if self.chain == "eth":
+                return self._trace_ethereum(address, hop)
+            return self._trace_legacy(address, hop, direction)
+        except Exception as e:
+            self._last_trace_error = str(e)
+            self.log("error", f"Unhandled exception in trace: {e}")
+            return False
 
     def _trace_legacy(self, address: str, hop: int = 1, direction: str = "both") -> bool:
         """Legacy trace implementation from Phase 2.
@@ -680,6 +687,7 @@ class BTCForensicsPro:
         Returns True if any data was saved to Neo4j.
         """
         if hop > self.max_hops:
+            self._last_trace_error = f"max_hops ({self.max_hops}) reached"
             return False
 
         key = f"eth-{address}-{hop}"
@@ -690,11 +698,15 @@ class BTCForensicsPro:
         try:
             txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="eth")
         except Exception as e:
-            self.log("error", f"Failed to get ETH transactions for {address}: {e}")
+            msg = f"Failed to get ETH transactions for {address}: {e}"
+            self.log("error", msg)
+            self._last_trace_error = msg
             return False
 
         if not txs:
-            self.log("debug", f"No transactions found for ETH address {address}")
+            msg = f"No ETH transactions found for {address}"
+            self.log("debug", msg)
+            self._last_trace_error = msg
             return False
 
         self.log("info", f"Found {len(txs)} ETH transactions for {address}")
