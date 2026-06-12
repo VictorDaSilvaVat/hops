@@ -50,7 +50,7 @@ def address_exists(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
         r = s.run(
-            "MATCH (a:Address {address:$a}) WHERE coalesce(a.chain, \"btc\") = $chain RETURN a LIMIT 1",
+            "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain RETURN a LIMIT 1",
             a=addr, chain=chain,
         ).single()
     driver.close()
@@ -60,7 +60,7 @@ def address_has_relations(addr, chain="btc"):
     driver = get_driver()
     with driver.session() as s:
         r = s.run(
-            "MATCH (a:Address {address:$a}) WHERE coalesce(a.chain, \"btc\") = $chain MATCH (a)-[r:SENT]-() RETURN count(r) AS cnt",
+            "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain MATCH (a)-[r:SENT]-() RETURN count(r) AS cnt",
             a=addr, chain=chain,
         ).single()
     driver.close()
@@ -72,12 +72,12 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
 
     q = f"""
     MATCH (root:Address {{address:$addr}})
-    WHERE coalesce(root.chain, "btc") = $chain
+    WHERE root.chain IS NULL OR root.chain = $chain
     MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
     UNWIND relationships(p) AS rel
     WITH DISTINCT rel
     MATCH (a:Address)-[rel]->(b:Address)
-    WHERE coalesce(a.chain, "btc") = $chain AND coalesce(b.chain, "btc") = $chain
+    WHERE (a.chain IS NULL OR a.chain = $chain) AND (b.chain IS NULL OR b.chain = $chain)
     RETURN 
         a.address AS from_addr,
         b.address AS to_addr,

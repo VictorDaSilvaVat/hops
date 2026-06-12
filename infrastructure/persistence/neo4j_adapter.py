@@ -119,17 +119,17 @@ class Neo4jAdapter(Neo4jRepository):
                 query = """
                 // Ensure source address exists
                 MERGE (from:Address {address: $from_address})
-                ON CREATE SET 
-                    from.chain = $chain,
-                    from.first_seen = datetime(),
+                SET from.chain = coalesce(from.chain, $chain),
                     from.updated_at = datetime()
+                ON CREATE SET 
+                    from.first_seen = datetime()
                 
                 // Ensure destination address exists  
                 MERGE (to:Address {address: $to_address})
-                ON CREATE SET
-                    to.chain = $chain,
-                    to.first_seen = datetime(),
+                SET to.chain = coalesce(to.chain, $chain),
                     to.updated_at = datetime()
+                ON CREATE SET
+                    to.first_seen = datetime()
                 
                 // Create or update transaction relationship
                 MERGE (from)-[r:SENT {txid: $txid}]->(to)
