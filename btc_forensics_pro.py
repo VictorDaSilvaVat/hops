@@ -100,6 +100,7 @@ class BTCForensicsPro:
         self.chain = chain
         self.chain_name = {"btc": "Bitcoin", "eth": "Ethereum", "bch": "Bitcoin Cash", "trx": "TRON"}.get(chain, "Bitcoin")
         self.unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
+        self.rate_limit_delay = 0.6  # seconds between hop traces
         self.case_id = case_id
         self._last_trace_error = ""
         self.investigator = investigator
@@ -634,6 +635,7 @@ class BTCForensicsPro:
 
             # Recursively trace destination address (only for non-change outputs in fanout)
             if not is_change and direction == "fanout":
+                time.sleep(self.rate_limit_delay)
                 self.trace(dest, hop + 1, direction="fanout")
 
     def _process_inputs(self, address: str, inputs: List, outputs: List,
@@ -677,6 +679,7 @@ class BTCForensicsPro:
 
                 # Recursively trace source address (only 1 hop back for fanin)
                 if direction == "fanin":
+                    time.sleep(self.rate_limit_delay)
                     self.trace(src, hop + 1, direction="fanin")
 
     def _is_change_output(self, inputs: List, output_address: str) -> bool:
@@ -779,6 +782,7 @@ class BTCForensicsPro:
                     self.log("error", f"Failed to save ETH tx {txid}: {e}")
 
                 if tx_type == "normal":
+                    time.sleep(self.rate_limit_delay)
                     self.trace(to_addr, hop + 1, direction="fanout")
 
             # FAN-IN: address receives ETH
@@ -799,6 +803,7 @@ class BTCForensicsPro:
                     self.log("error", f"Failed to save ETH tx {txid}: {e}")
 
                 if hop == 1:
+                    time.sleep(self.rate_limit_delay)
                     self.trace(from_addr, hop + 1, direction="fanin")
 
         return True
@@ -876,6 +881,7 @@ class BTCForensicsPro:
                     self.log("error", f"Failed to save TRX tx {txid}: {e}")
 
                 if tx_type == "transfer":
+                    time.sleep(self.rate_limit_delay)
                     self.trace(to_addr, hop + 1, direction="fanout")
 
             # FAN-IN: address receives TRX
@@ -896,6 +902,7 @@ class BTCForensicsPro:
                     self.log("error", f"Failed to save TRX tx {txid}: {e}")
 
                 if hop == 1:
+                    time.sleep(self.rate_limit_delay)
                     self.trace(from_addr, hop + 1, direction="fanin")
 
         return True
@@ -939,9 +946,9 @@ class BTCForensicsPro:
                     resumen_lines.append(f"... y {tx_count - shown} transaccion(es) mas ...")
                     break
                 amt = float(r.get("amount") or 0.0)
-                from_addr = r.get("from_address", "")[:12]
-                to_addr = r.get("to_address", "")[:12]
-                txid = r.get("txid", "")[:10]
+                from_addr = r.get("from_address", "")
+                to_addr = r.get("to_address", "")
+                txid = r.get("txid", "")
                 line = f"{from_addr} -> {to_addr} | {amt:.4f} {self.unit} | {txid}"
                 resumen_lines.append(line)
                 shown += 1
@@ -951,9 +958,9 @@ class BTCForensicsPro:
                 if r.get("from_address", "") == address:
                     total_out += amt
                 if r.get("from_address", ""):
-                    unique_senders.add(r["from_address"][:12])
+                    unique_senders.add(r["from_address"])
                 if r.get("to_address", ""):
-                    unique_receivers.add(r["to_address"][:12])
+                    unique_receivers.add(r["to_address"])
 
             resumen_lines.append("")
             resumen_lines.append(f"Total recibido (muestra): {total_in:.4f} {self.unit}")

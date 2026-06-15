@@ -121,18 +121,24 @@ class Neo4jAdapter(Neo4jRepository):
                 MERGE (from:Address {address: $from_address})
                 ON CREATE SET 
                     from.chain = $chain,
+                    from.entity_type = "unknown",
+                    from.labels = [],
                     from.first_seen = datetime(),
                     from.updated_at = datetime()
                 SET from.chain = coalesce(from.chain, $chain),
+                    from.entity_type = coalesce(from.entity_type, "unknown"),
                     from.updated_at = datetime()
                 
                 // Ensure destination address exists  
                 MERGE (to:Address {address: $to_address})
                 ON CREATE SET
                     to.chain = $chain,
+                    to.entity_type = "unknown",
+                    to.labels = [],
                     to.first_seen = datetime(),
                     to.updated_at = datetime()
                 SET to.chain = coalesce(to.chain, $chain),
+                    to.entity_type = coalesce(to.entity_type, "unknown"),
                     to.updated_at = datetime()
                 
                 // Create or update transaction relationship

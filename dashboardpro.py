@@ -13,6 +13,71 @@ import zipfile
 import io
 from pyvis.network import Network
 import streamlit.components.v1 as components
+import base58
+import hashlib
+import re
+
+# -------------------------
+# Address validation for all chains
+# -------------------------
+def is_valid_trx_address(addr: str) -> bool:
+    if len(addr) != 34 or not addr.startswith("T"):
+        return False
+    try:
+        decoded = base58.b58decode(addr)
+        return len(decoded) == 25 and decoded[0] == 0x41
+    except Exception:
+        return False
+
+BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+def is_valid_btc_address(addr: str) -> bool:
+    if not addr:
+        return False
+    if addr.startswith("bc1") or addr.startswith("BC1"):
+        if len(addr) < 42 or len(addr) > 62:
+            return False
+        return all(c in BECH32_CHARSET for c in addr[3:].lower())
+    if addr.startswith("1") or addr.startswith("3"):
+        if len(addr) < 26 or len(addr) > 35:
+            return False
+        try:
+            decoded = base58.b58decode(addr)
+            return len(decoded) >= 25
+        except Exception:
+            return False
+    return False
+
+def is_valid_eth_address(addr: str) -> bool:
+    return bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", addr))
+
+def is_valid_bch_address(addr: str) -> bool:
+    if not addr:
+        return False
+    if addr.startswith("bitcoincash:"):
+        addr = addr[12:]
+    if addr.startswith(("q", "Q", "p", "P")):
+        if len(addr) < 35 or len(addr) > 60:
+            return False
+        if addr != addr.lower() and addr != addr.upper():
+            return False
+        return all(c in BECH32_CHARSET for c in addr.lower())
+    if addr.startswith("1") or addr.startswith("3"):
+        return is_valid_btc_address(addr)
+    return False
+
+def validate_address(addr: str, chain: str) -> tuple[bool, str]:
+    """Returns (is_valid, error_message)."""
+    validators = {
+        "btc": (is_valid_btc_address, "Debe comenzar con 1, 3 o bc1 (26-62 caracteres)."),
+        "eth": (is_valid_eth_address, "Debe ser 0x seguido de 40 caracteres hex (a-f, 0-9)."),
+        "bch": (is_valid_bch_address, "Debe ser cashaddr (q/p...) o legacy (1/3...)."),
+        "trx": (is_valid_trx_address, "Debe comenzar con T y tener 34 caracteres base58."),
+    }
+    validator, hint = validators.get(chain, (lambda a: bool(a), ""))
+    if not validator(addr):
+        return False, f"Dirección {chain.upper()} inválida. {hint}"
+    return True, ""
 
 # -------------------------
 # Config
@@ -426,9 +491,11 @@ def show_sankey(edges):
         st.info("Sin datos válidos para Sankey.")
         return
 
+    df["from_entity"] = df.get("from_entity", None).fillna("unknown")
+    df["to_entity"] = df.get("to_entity", None).fillna("unknown")
     df["amount"] = df["amount"].astype(float)
     top = (
-        df.groupby(["from_addr", "to_addr"], as_index=False)
+        df.groupby(["from_addr", "to_addr", "from_entity", "to_entity"], as_index=False)
         .sum()
         .sort_values("amount", ascending=False)
         .head(200)
@@ -742,6 +809,9 @@ def main():
         unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
         TRACER_PARAMS["chain"] = chain
 
+        max_hops = st.slider("Profundidad (hops)", min_value=1, max_value=5, value=min(TRACER_PARAMS["max_hops"], 5), help="A mayor profundidad, más llamadas a APIs externas y mayor tiempo de procesamiento.")
+        TRACER_PARAMS["max_hops"] = max_hops
+
         st.markdown("<hr style='margin: 20px 0 12px;'>", unsafe_allow_html=True)
 
         st.markdown("""
@@ -811,6 +881,11 @@ def main():
     if st.button("Iniciar análisis", use_container_width=True):
         if not addr:
             st.error("Por favor ingrese una dirección válida.")
+            return
+
+        valid, err_msg = validate_address(addr, chain)
+        if not valid:
+            st.error(err_msg)
             return
 
         st.session_state.last_address = addr

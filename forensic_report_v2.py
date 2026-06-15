@@ -573,10 +573,14 @@ class EnhancedForensicReporter:
             graph_png = os.path.join(folder, "graph_chart.png")
 
             class PDF(FPDF):
+                def __init__(self, chain_name):
+                    super().__init__()
+                    self._chain_name = chain_name
+
                 def header(self):
                     self.set_font("Helvetica", "B", 9)
                     self.set_text_color(100, 100, 100)
-                    self.cell(0, 6, f"HOPS - Reporte Forense {self.chain_name}", align="R", new_x="LMARGIN", new_y="NEXT")
+                    self.cell(0, 6, f"HOPS - Reporte Forense {self._chain_name}", align="R", new_x="LMARGIN", new_y="NEXT")
                     self.line(10, self.get_y(), 200, self.get_y())
                     self.ln(3)
 
@@ -600,7 +604,7 @@ class EnhancedForensicReporter:
                     self.multi_cell(0, 5, text)
                     self.ln(3)
 
-            pdf = PDF()
+            pdf = PDF(chain_name=self.chain_name)
             pdf.alias_nb_pages()
 
             # --- Cover Page ---
