@@ -814,6 +814,55 @@ def main():
 
         st.markdown("<hr style='margin: 20px 0 12px;'>", unsafe_allow_html=True)
 
+        # -------------------------
+        # Label editor in sidebar
+        # -------------------------
+        with st.expander("🏷️ Editar etiquetas", expanded=False):
+            search_addr = st.text_input("Buscar dirección", placeholder="Dirección completa o parcial...", label_visibility="collapsed")
+            if search_addr:
+                driver = get_driver()
+                with driver.session() as s:
+                    results = list(s.run("""
+                        MATCH (a:Address)
+                        WHERE a.address CONTAINS $q OR ANY(lab IN a.labels WHERE lab CONTAINS $q)
+                        RETURN a.address AS address, a.chain AS chain,
+                               a.entity_type AS entity_type, a.labels AS labels,
+                               a.wallet_id AS wallet_id
+                        LIMIT 15
+                    """, q=search_addr))
+                driver.close()
+                if results:
+                    for rec in results:
+                        addr = rec["address"]
+                        cur_labels = rec["labels"] or []
+                        cur_entity = rec["entity_type"] or "unknown"
+                        st.caption(f"`{addr[:20]}...` ({rec['chain'] or '?'})")
+                        cols = st.columns([3, 1])
+                        with cols[0]:
+                            new_labels = st.text_input("Labels", value=", ".join(cur_labels) if cur_labels else "",
+                                                       key=f"lbl_{addr}", label_visibility="collapsed",
+                                                       placeholder="label1, label2")
+                        with cols[1]:
+                            new_entity = st.selectbox("Tipo", ["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"],
+                                                      index=["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"].index(cur_entity) if cur_entity in ["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"] else 0,
+                                                      key=f"ent_{addr}", label_visibility="collapsed")
+                        if st.button("Guardar", key=f"save_{addr}", use_container_width=True):
+                            parsed = [x.strip() for x in new_labels.split(",") if x.strip()]
+                            driver2 = get_driver()
+                            with driver2.session() as s2:
+                                s2.run("""
+                                    MATCH (a:Address {address: $addr})
+                                    SET a.labels = $labels,
+                                        a.entity_type = $entity_type,
+                                        a.updated_at = datetime()
+                                """, addr=addr, labels=parsed, entity_type=new_entity)
+                            driver2.close()
+                            st.success(f"✓ {addr[:16]}...")
+                            st.rerun()
+                        st.divider()
+                else:
+                    st.info("Sin resultados.")
+
         st.markdown("""
         <div class="sidebar-footer">
             HOPS v2.0 — Labmoon © 2026

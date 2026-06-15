@@ -436,6 +436,58 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error getting subgraph edges for {address}: {e}")
         return rows
 
+    def update_address_labels(self, address: str, labels: List[str], entity_type: Optional[str] = None,
+                               chain: Optional[str] = None) -> bool:
+        """Manually update labels and/or entity_type for an address."""
+        try:
+            with self.driver.session() as session:
+                query = """
+                MATCH (a:Address {address: $address})
+                WHERE ($chain IS NULL OR a.chain = $chain OR a.chain IS NULL)
+                SET a.labels = $labels,
+                    a.entity_type = coalesce($entity_type, a.entity_type),
+                    a.updated_at = datetime()
+                RETURN a.address AS addr
+                """
+                result = session.run(query, address=address, labels=labels,
+                                     entity_type=entity_type, chain=chain)
+                record = result.single()
+                if record:
+                    self.logger.info(f"Updated labels for {record['addr']}: {labels}")
+                    return True
+                self.logger.warning(f"Address not found: {address}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error updating labels for {address}: {e}")
+            return False
+
+    def search_addresses(self, search_str: str, chain: Optional[str] = None,
+                         limit: int = 20) -> List[Dict[str, Any]]:
+        """Search addresses by partial match on address, wallet_id, or labels."""
+        try:
+            with self.driver.session() as session:
+                q = """
+                MATCH (a:Address)
+                WHERE a.address CONTAINS $q
+                   OR a.wallet_id CONTAINS $q
+                   OR ANY(lab IN a.labels WHERE lab CONTAINS $q)
+                """
+                params = {"q": search_str, "limit": limit}
+                if chain:
+                    q += " AND (a.chain = $chain OR a.chain IS NULL) "
+                    params["chain"] = chain
+                q += """
+                RETURN a.address AS address, a.chain AS chain,
+                       a.entity_type AS entity_type, a.labels AS labels,
+                       a.wallet_id AS wallet_id
+                LIMIT $limit
+                """
+                result = session.run(q, **params)
+                return [dict(r) for r in result]
+        except Exception as e:
+            self.logger.error(f"Error searching addresses: {e}")
+            return []
+
     def clear_database(self) -> bool:
         """
         Clear all data from the Neo4j graph database.
