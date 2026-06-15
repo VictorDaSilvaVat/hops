@@ -28,6 +28,7 @@ def generate_with_openrouter(
     model: str = "google/gemini-2.0-flash-001",
     temperature: float = 0.1,
     max_tokens: int = 4096,
+    chain_name: str = "Bitcoin",
 ) -> Optional[str]:
     """
     Generate text using OpenRouter API (OpenAI-compatible).
@@ -50,7 +51,7 @@ def generate_with_openrouter(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/labmoon/hops",
-        "X-Title": "HOPS Bitcoin Forensics",
+        "X-Title": f"HOPS {chain_name} Forensics",
     }
 
     payload = {

@@ -1,4 +1,3 @@
-# dashboard.py
 import streamlit as st
 import pandas as pd
 import networkx as nx
@@ -16,14 +15,14 @@ from pyvis.network import Network
 import streamlit.components.v1 as components
 
 # -------------------------
-# Configuración (from env for Coolify)
+# Config
 # -------------------------
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.environ.get("NEO4J_PASSWORD", "neo4jneo4j")
 NEO4J_DB = os.environ.get("NEO4J_DB", "")
 
-AI_PROVIDER = os.environ.get("AI_PROVIDER", "ollama")  # "ollama" or "openrouter"
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "ollama")
 AI_MODEL = os.environ.get("AI_MODEL", "llama3" if AI_PROVIDER == "ollama" else "google/gemini-2.0-flash-001")
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
@@ -39,6 +38,256 @@ TRACER_PARAMS = {
 }
 
 OLLAMA_MODEL = AI_MODEL
+
+# -------------------------
+# Styling
+# -------------------------
+st.set_page_config(page_title="HOPS — Blockchain Forensics Platform", layout="wide")
+
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .stApp {
+        background: #0f1117;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #161822 0%, #0f1117 100%);
+        border-right: 1px solid rgba(255,255,255,0.06);
+    }
+    section[data-testid="stSidebar"] .stButton button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 14px;
+        padding: 10px 16px;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        border: none;
+        color: white;
+        transition: all 0.2s;
+    }
+    section[data-testid="stSidebar"] .stButton button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 25px rgba(99,102,241,0.35);
+    }
+    section[data-testid="stSidebar"] .stSelectbox label {
+        color: #94a3b8 !important;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+    }
+
+    /* Logo area */
+    .sidebar-logo {
+        padding: 24px 16px 16px;
+        text-align: center;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        margin-bottom: 20px;
+    }
+    .sidebar-logo img {
+        max-width: 140px;
+        height: auto;
+    }
+    .sidebar-brand {
+        font-size: 22px;
+        font-weight: 800;
+        color: #e2e8f0;
+        letter-spacing: -0.02em;
+        margin-top: 8px;
+    }
+    .sidebar-brand span {
+        background: linear-gradient(135deg, #6366f1, #a78bfa);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    .sidebar-tagline {
+        font-size: 11px;
+        color: #64748b;
+        margin-top: 2px;
+        letter-spacing: 0.03em;
+    }
+    .sidebar-footer {
+        position: fixed;
+        bottom: 16px;
+        left: 16px;
+        right: 16px;
+        font-size: 10px;
+        color: #334155;
+        text-align: center;
+    }
+
+    /* Main header */
+    .main-header {
+        padding: 8px 0 0;
+    }
+    .main-header h1 {
+        font-size: 28px;
+        font-weight: 800;
+        color: #e2e8f0;
+        letter-spacing: -0.03em;
+        margin: 0;
+    }
+    .main-header p {
+        color: #64748b;
+        font-size: 14px;
+        margin-top: 4px;
+    }
+
+    /* Filter card */
+    .filter-card {
+        background: #1a1d2e;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin: 16px 0 24px;
+    }
+    .filter-card h3 {
+        color: #94a3b8;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 600;
+        margin: 0 0 16px;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background: #1a1d2e;
+        border-radius: 10px;
+        padding: 4px;
+        border: 1px solid rgba(255,255,255,0.06);
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 8px 18px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #64748b;
+        transition: all 0.15s;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+        color: white !important;
+        font-weight: 600;
+    }
+
+    /* Cards */
+    .metric-card {
+        background: #1a1d2e;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 10px;
+        padding: 16px 20px;
+        transition: all 0.2s;
+    }
+    .metric-card:hover {
+        border-color: rgba(99,102,241,0.3);
+    }
+    .metric-card .label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #64748b;
+        font-weight: 600;
+    }
+    .metric-card .value {
+        font-size: 22px;
+        font-weight: 700;
+        color: #e2e8f0;
+        margin-top: 4px;
+    }
+
+    /* Report section */
+    .report-section {
+        background: #1a1d2e;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        padding: 24px;
+        margin-top: 16px;
+    }
+
+    /* Download buttons */
+    .stDownloadButton button {
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 13px;
+        padding: 8px 20px;
+        transition: all 0.2s;
+    }
+
+    /* Success/warning/info boxes */
+    .stAlert {
+        border-radius: 10px;
+        border: none;
+    }
+
+    /* DataFrames */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    /* Text inputs */
+    .stTextInput input {
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: #1a1d2e;
+        color: #e2e8f0;
+        font-size: 15px;
+        padding: 12px 16px;
+    }
+    .stTextInput input:focus {
+        border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+    }
+
+    /* Checkboxes */
+    .stCheckbox label {
+        color: #cbd5e1 !important;
+        font-size: 13px;
+    }
+
+    /* Number inputs */
+    .stNumberInput input {
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: #1a1d2e;
+        color: #e2e8f0;
+    }
+
+    /* Select boxes in filters */
+    .stSelectbox div[data-baseweb="select"] {
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: #1a1d2e;
+    }
+
+    hr {
+        border-color: rgba(255,255,255,0.06);
+        margin: 12px 0;
+    }
+
+    /* Spinner */
+    .stSpinner > div {
+        border-color: #6366f1 !important;
+    }
+
+    /* Markdown text */
+    p, li, .stMarkdown {
+        color: #cbd5e1;
+    }
+    h1, h2, h3, h4, h5, h6 {
+        color: #e2e8f0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # -------------------------
 # Neo4j helpers
@@ -97,13 +346,11 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     with driver.session() as s:
         for rec in s.run(q, addr=addr, limit=limit, chain=chain):
             row = dict(rec)
-            # Ensure labels are lists
             if not isinstance(row.get('from_labels'), list):
                 row['from_labels'] = []
             if not isinstance(row.get('to_labels'), list):
                 row['to_labels'] = []
-            
-            # Robust conversion of timestamp (ts) to epoch integer
+
             ts = row.get('ts')
             if ts:
                 if hasattr(ts, 'to_native'):
@@ -116,33 +363,37 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
                     row['ts'] = 0
             else:
                 row['ts'] = 0
-                
+
             rows.append(row)
 
     driver.close()
     return rows
+
+# -------------------------
+# Graph
+# -------------------------
 def show_graph(edges):
     if not edges:
         st.info("Sin datos para grafo.")
         return
 
-    net = Network(height="600px", width="100%", directed=True, bgcolor="#222222", font_color="white")
+    net = Network(height="600px", width="100%", directed=True, bgcolor="#1a1d2e", font_color="white")
 
     color_map = {
-        "exchange": "blue",
-        "mixer": "red",
-        "sanctioned": "black",
-        "bridge": "green",
-        "other": "gray",
-        None: "gray"
+        "exchange": "#3b82f6",
+        "mixer": "#ef4444",
+        "sanctioned": "#dc2626",
+        "bridge": "#22c55e",
+        "other": "#6b7280",
+        None: "#6b7280"
     }
 
     for e in edges:
         fe = e.get("from_entity", "other")
         te = e.get("to_entity", "other")
 
-        net.add_node(e["from_addr"], label=e["from_addr"][:12] + "...", color=color_map.get(fe, "gray"))
-        net.add_node(e["to_addr"], label=e["to_addr"][:12] + "...", color=color_map.get(te, "gray"))
+        net.add_node(e["from_addr"], label=e["from_addr"][:12] + "...", color=color_map.get(fe, "#6b7280"))
+        net.add_node(e["to_addr"], label=e["to_addr"][:12] + "...", color=color_map.get(te, "#6b7280"))
 
         net.add_edge(e["from_addr"], e["to_addr"], value=float(e["amount"]))
 
@@ -152,14 +403,12 @@ def show_graph(edges):
 
     with open("graph.html", "r", encoding="utf-8") as f:
         html = f.read()
-    
-    # Encode HTML to base64 for iframe srcdoc
+
     html_base64 = base64.b64encode(html.encode('utf-8')).decode('utf-8')
     iframe_src = f"data:text/html;base64,{html_base64}"
-    
-    # Display using iframe
+
     st.markdown(
-        f'<iframe src="{iframe_src}" width="100%" height="600" style="border:none;"></iframe>',
+        f'<iframe src="{iframe_src}" width="100%" height="600" style="border:none; border-radius: 10px;"></iframe>',
         unsafe_allow_html=True
     )
 
@@ -184,7 +433,7 @@ def show_sankey(edges):
         .sort_values("amount", ascending=False)
         .head(200)
     )
-    st.dataframe(top)
+    st.dataframe(top, use_container_width=True)
 
 # -------------------------
 # Heatmap
@@ -202,8 +451,8 @@ def show_heatmap(edges):
 
     df["hour"] = pd.to_datetime(df["ts"], unit="s").dt.hour
     agg = df.groupby("hour").amount.sum().reset_index()
-    chart = alt.Chart(agg).mark_bar().encode(x="hour:O", y="amount:Q")
-    st.altair_chart(chart, width='stretch')
+    chart = alt.Chart(agg).mark_bar(color="#6366f1").encode(x="hour:O", y="amount:Q")
+    st.altair_chart(chart, use_container_width=True)
 
 # -------------------------
 # Timeline
@@ -221,18 +470,18 @@ def show_timeline(edges):
 
     df["time"] = pd.to_datetime(df["ts"], unit="s")
     df = df.sort_values("time")
-    chart = alt.Chart(df).mark_line().encode(x="time:T", y="amount:Q")
-    st.altair_chart(chart, width='stretch')
+    chart = alt.Chart(df).mark_line(color="#6366f1").encode(x="time:T", y="amount:Q")
+    st.altair_chart(chart, use_container_width=True)
 
 # -------------------------
-# Panel de riesgo
+# Risk panel
 # -------------------------
 def show_risk(edges, root, chain="btc"):
     if not edges:
         st.info("Sin datos para panel de riesgo.")
         return
 
-    unit = "ETH" if chain == "eth" else "BCH" if chain == "bch" else "TRX" if chain == "trx" else "BTC"
+    unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
     df = pd.DataFrame(edges)
     df = df[df["amount"].notnull()]
     if df.empty:
@@ -245,23 +494,39 @@ def show_risk(edges, root, chain="btc"):
     neighbors = pd.concat([df["from_addr"], df["to_addr"]]).nunique()
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total entrante", f"{total_in:.8f} {unit}")
-    col2.metric("Total saliente", f"{total_out:.8f} {unit}")
-    col3.metric("Vecinos únicos", neighbors)
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="label">Total entrante</div>
+            <div class="value">{total_in:.8f} {unit}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="label">Total saliente</div>
+            <div class="value">{total_out:.8f} {unit}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="label">Vecinos únicos</div>
+            <div class="value">{neighbors}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # -------------------------
-# Dashboard principal
+# Main dashboard
 # -------------------------
 def show_dashboard(addr, filters, chain="btc"):
     edges = fetch_subgraph(addr, depth=TRACER_PARAMS["max_hops"], chain=chain)
-
     edges = [e for e in edges if "amount" in e and e["amount"] is not None]
 
     if not edges:
         st.warning("No hay relaciones válidas para esta dirección.")
         return
 
-    # Filtros
     edges = [e for e in edges if float(e["amount"]) >= filters["min_amount"]]
     if filters["only_hop1"]:
         edges = [e for e in edges if e.get("hop") == 1]
@@ -300,7 +565,6 @@ def show_dashboard(addr, filters, chain="btc"):
         if "ts" in df.columns:
             df["time"] = pd.to_datetime(df["ts"], unit="s")
             df = df.sort_values("time")
-        # Convert labels to string for display
         def _labels_to_str(labels):
             if isinstance(labels, list):
                 return ', '.join(labels)
@@ -308,75 +572,55 @@ def show_dashboard(addr, filters, chain="btc"):
                 return labels
             else:
                 return str(labels) if labels else ''
-        
         if 'from_labels' in df.columns:
             df['from_label'] = df['from_labels'].apply(_labels_to_str)
         if 'to_labels' in df.columns:
             df['to_label'] = df['to_labels'].apply(_labels_to_str)
-        # Select the columns to display: replace entity columns with label columns
         display_columns = ['from_addr', 'to_addr', 'amount', 'txid', 'hop', 'ts', 'is_change', 'from_label', 'to_label', 'time']
-        # Ensure the columns exist in the dataframe
         display_columns = [col for col in display_columns if col in df.columns]
-        st.dataframe(df[display_columns])
+        st.dataframe(df[display_columns], use_container_width=True)
 
     with tabs[5]:
         show_risk(edges, addr, chain=chain)
 
     # -------------------------
-    # REPORTE IA (V2 - Enhanced)
+    # AI Report tab
     # -------------------------
     with tabs[6]:
-        st.subheader("Reporte IA (Ollama)")
-
         col_legacy, col_enhanced = st.columns(2)
-
         with col_legacy:
-            if st.button("Generar reporte IA (simple)"):
+            if st.button("Generar reporte IA (simple)", use_container_width=True):
                 tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
-
                 resumen = tracer.build_summary(st.session_state.last_address)
                 reporte = tracer.generate_ai_report_with_ollama(resumen, model=OLLAMA_MODEL)
-
                 st.session_state.ai_report = reporte
-
                 st.session_state.transaction_graph = tracer.generate_transaction_graph_html(
                     st.session_state.last_address, limit=100
                 )
-
                 paths = tracer.save_report_to_files(st.session_state.last_address, reporte)
-
                 metadata = {
                     "model": OLLAMA_MODEL,
                     "generated_at": int(time.time()),
                     "filters": filters
                 }
-
                 tracer.save_report_to_neo4j(st.session_state.last_address, reporte, model=OLLAMA_MODEL, metadata=metadata)
                 tracer.close()
-
                 st.success("Reporte simple generado.")
-                st.info(f"TXT: {paths.get('txt', '')}")
-                st.info(f"MD: {paths.get('md', '')}")
 
         with col_enhanced:
-            if st.button("Generar reporte IA + PDF (completo)"):
-                with st.spinner("Generando reporte completo... esto puede tomar varios segundos."):
+            if st.button("Generar reporte IA + PDF (completo)", use_container_width=True):
+                with st.spinner("Generando reporte completo..."):
                     tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
-
-                    # Use the new enhanced report generation
                     result = tracer.generate_enhanced_report(
                         st.session_state.last_address,
                         filters=filters,
                         depth=TRACER_PARAMS["max_hops"],
                         model=OLLAMA_MODEL,
                     )
-
                     if "error" in result:
                         st.error(result["error"])
                     else:
                         st.session_state.enhanced_report = result
-
-                        # Read the narrative from the metadata JSON (avoids calling Ollama again)
                         metadata_path = result.get("data_json", "")
                         if metadata_path and os.path.exists(metadata_path):
                             with open(metadata_path, "r", encoding="utf-8") as f:
@@ -385,15 +629,16 @@ def show_dashboard(addr, filters, chain="btc"):
                         else:
                             st.session_state.ai_report = result.get("ollama_narrative", "")
                         st.session_state.transaction_graph = result.get("graph")
-
                     tracer.close()
 
-        # Display current report
         if st.session_state.ai_report:
-            st.markdown("### Reporte generado")
+            st.markdown("""
+            <div class="report-section">
+                <h4 style="color:#e2e8f0; margin: 0 0 12px; font-size: 15px; font-weight: 600;">📄 Reporte generado</h4>
+            </div>
+            """, unsafe_allow_html=True)
             st.write(st.session_state.ai_report)
 
-        # Display enhanced report results
         if st.session_state.get("enhanced_report"):
             result = st.session_state.enhanced_report
             st.markdown("---")
@@ -404,36 +649,33 @@ def show_dashboard(addr, filters, chain="btc"):
             html_path = result.get("html", "")
 
             if folder:
-                st.info(f"Carpeta del analisis: **{folder}**")
-
-                # Show folder contents as a table
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
                     if pdf_path and os.path.exists(pdf_path):
                         with open(pdf_path, "rb") as f:
                             st.download_button(
-                                label="Descargar PDF",
+                                label="📥 Descargar PDF",
                                 data=f,
                                 file_name=os.path.basename(pdf_path),
                                 mime="application/pdf",
+                                use_container_width=True,
                             )
                     else:
                         pdf_error = result.get("pdf_error", "")
                         msg = "PDF no disponible"
                         if pdf_error:
                             msg += f": {pdf_error}"
-                        else:
-                            msg += " (verificar dependencias)"
                         st.warning(msg)
 
                 with col_b:
                     if html_path and os.path.exists(html_path):
                         with open(html_path, "r", encoding="utf-8") as f:
                             st.download_button(
-                                label="Descargar HTML",
+                                label="📥 Descargar HTML",
                                 data=f,
                                 file_name=os.path.basename(html_path),
                                 mime="text/html",
+                                use_container_width=True,
                             )
 
                 with col_c:
@@ -441,13 +683,13 @@ def show_dashboard(addr, filters, chain="btc"):
                     if csv_path and os.path.exists(csv_path):
                         with open(csv_path, "r", encoding="utf-8") as f:
                             st.download_button(
-                                label="Descargar CSV",
+                                label="📥 Descargar CSV",
                                 data=f,
                                 file_name=os.path.basename(csv_path),
                                 mime="text/csv",
+                                use_container_width=True,
                             )
 
-                # ZIP download with all files
                 st.markdown("---")
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -457,44 +699,66 @@ def show_dashboard(addr, filters, chain="btc"):
                             zf.write(fpath, arcname=fname)
                 zip_buffer.seek(0)
                 st.download_button(
-                    label="Descargar todo (ZIP)",
+                    label="📦 Descargar todo (ZIP)",
                     data=zip_buffer,
                     file_name=f"reporte_{st.session_state.last_address[:12]}.zip",
                     mime="application/zip",
                     type="primary",
+                    use_container_width=True,
                 )
 
-                # List all files in folder
-                st.markdown("**Archivos generados:**")
                 if os.path.exists(folder):
-                    for fname in sorted(os.listdir(folder)):
-                        fpath = os.path.join(folder, fname)
-                        size = os.path.getsize(fpath)
-                        st.text(f"  {fname} ({size:,} bytes)")
+                    with st.expander("Archivos generados", expanded=True):
+                        for fname in sorted(os.listdir(folder)):
+                            fpath = os.path.join(folder, fname)
+                            size = os.path.getsize(fpath)
+                            st.text(f"  {fname} ({size:,} bytes)")
 
     with tabs[7]:
-        st.subheader("Grafo de Transacciones Detallado (PyVis)")
         if st.session_state.transaction_graph:
+            st.markdown("""
+            <h4 style="color:#e2e8f0; margin-bottom: 12px; font-weight: 600;">Grafo de Transacciones Detallado</h4>
+            """, unsafe_allow_html=True)
             st.components.v1.html(st.session_state.transaction_graph, height=750, scrolling=True)
         else:
-            st.info("Presione 'Generar reporte IA + PDF' en la pestana 'Reporte IA' para construir y visualizar el grafo interactivo.")
+            st.info("Presione 'Generar reporte IA + PDF' en la pestaña 'Reporte IA' para construir y visualizar el grafo interactivo.")
 
 # -------------------------
-# MAIN UI
+# Main UI
 # -------------------------
 def main():
-    st.set_page_config(page_title="Dashboard Forense Multi-Chain", layout="wide")
-
-    # Sidebar chain selector
+    # Sidebar
     with st.sidebar:
-        chain = st.selectbox("Blockchain", ["BTC", "ETH", "BCH", "TRX"], index=0)
+        st.markdown("""
+        <div class="sidebar-logo">
+            <img src="data:image/png;base64,{0}" width="140">
+            <div class="sidebar-brand">HOPS <span>Forensics</span></div>
+            <div class="sidebar-tagline">Blockchain Intelligence Platform</div>
+        </div>
+        """.format(_get_logo_b64()), unsafe_allow_html=True)
+
+        chain = st.selectbox("Red", ["BTC", "ETH", "BCH", "TRX"], index=0, label_visibility="collapsed")
         chain = chain.lower()
-        unit = "ETH" if chain == "eth" else "BCH" if chain == "bch" else "TRX" if chain == "trx" else "BTC"
+        unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
         TRACER_PARAMS["chain"] = chain
 
-    st.title(f"Dashboard Forense {unit.upper()} — Filtros avanzados + Reporte IA")
+        st.markdown("<hr style='margin: 20px 0 12px;'>", unsafe_allow_html=True)
 
-    # Initialize session state variables
+        st.markdown("""
+        <div class="sidebar-footer">
+            HOPS v2.0 — Labmoon © 2026
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Main content
+    st.markdown('<div class="main-header">', unsafe_allow_html=True)
+    st.markdown(f"""
+    <h1>🔍 Análisis Forense {unit.upper()}</h1>
+    <p>Ingrese una dirección de {unit.upper()} para trazar transacciones, detectar patrones y generar reportes de inteligencia.</p>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Session state
     if "analysis_done" not in st.session_state:
         st.session_state.analysis_done = False
     if "last_address" not in st.session_state:
@@ -508,28 +772,31 @@ def main():
     if "chain" not in st.session_state:
         st.session_state.chain = chain
 
-
-    addr_input = st.text_input(f"Dirección {unit.upper()}:", value=st.session_state.last_address or "")
+    # Address input
+    addr_input = st.text_input(
+        f"Dirección {unit}",
+        value=st.session_state.last_address or "",
+        placeholder=f"Ingrese una dirección de {unit.upper()}...",
+        label_visibility="collapsed",
+    )
     if chain == "trx":
         addr = addr_input.strip()
     else:
         addr = addr_input.strip().lower()
 
-    st.markdown("### Filtros avanzados")
-
+    # Filters
+    st.markdown('<div class="filter-card"><h3>⚙️ Filtros de análisis</h3>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
-
     with col1:
         min_amount = st.number_input(f"Monto mínimo ({unit})", min_value=0.0, value=0.00001, step=0.00001, format="%.8f")
-        only_hop1 = st.checkbox("Solo hop 1")
-        hide_change = st.checkbox("Ocultar change outputs")
-
     with col2:
+        only_hop1 = st.checkbox("Solo hop 1")
         only_fanin = st.checkbox("Solo FAN-IN")
-        only_fanout = st.checkbox("Solo FAN-OUT")
-
     with col3:
-        entity = st.selectbox("Filtrar por entidad", ["Todas", "exchange", "mixer", "bridge", "sanctioned", "other"])
+        hide_change = st.checkbox("Ocultar change outputs")
+        only_fanout = st.checkbox("Solo FAN-OUT")
+    entity = st.selectbox("Filtrar por entidad", ["Todas", "exchange", "mixer", "bridge", "sanctioned", "other"], label_visibility="collapsed")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     filters = {
         "min_amount": min_amount,
@@ -541,9 +808,9 @@ def main():
         "_chain": chain,
     }
 
-    if st.button("Procesar"):
+    if st.button("Iniciar análisis", use_container_width=True):
         if not addr:
-            st.error("Introduce una dirección válida.")
+            st.error("Por favor ingrese una dirección válida.")
             return
 
         st.session_state.last_address = addr
@@ -574,6 +841,16 @@ def main():
 
     if st.session_state.analysis_done and st.session_state.last_address:
         show_dashboard(st.session_state.last_address, filters, chain=chain)
+
+def _get_logo_b64():
+    try:
+        logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+    except Exception:
+        pass
+    return ""
 
 if __name__ == "__main__":
     main()

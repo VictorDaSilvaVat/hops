@@ -98,6 +98,8 @@ class BTCForensicsPro:
         self.max_hops = max_hops
         self.min_amount = min_amount  # FILTRO ANTI-DUST
         self.chain = chain
+        self.chain_name = {"btc": "Bitcoin", "eth": "Ethereum", "bch": "Bitcoin Cash", "trx": "TRON"}.get(chain, "Bitcoin")
+        self.unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
         self.case_id = case_id
         self._last_trace_error = ""
         self.investigator = investigator
@@ -940,7 +942,7 @@ class BTCForensicsPro:
                 from_addr = r.get("from_address", "")[:12]
                 to_addr = r.get("to_address", "")[:12]
                 txid = r.get("txid", "")[:10]
-                line = f"{from_addr} -> {to_addr} | {amt:.4f} BTC | {txid}"
+                line = f"{from_addr} -> {to_addr} | {amt:.4f} {self.unit} | {txid}"
                 resumen_lines.append(line)
                 shown += 1
                 
@@ -954,8 +956,8 @@ class BTCForensicsPro:
                     unique_receivers.add(r["to_address"][:12])
 
             resumen_lines.append("")
-            resumen_lines.append(f"Total recibido (muestra): {total_in:.4f} BTC")
-            resumen_lines.append(f"Total enviado (muestra): {total_out:.4f} BTC")
+            resumen_lines.append(f"Total recibido (muestra): {total_in:.4f} {self.unit}")
+            resumen_lines.append(f"Total enviado (muestra): {total_out:.4f} {self.unit}")
             resumen_lines.append(f"Remitentes unicos: {len(unique_senders)}")
             resumen_lines.append(f"Destinatarios unicos: {len(unique_receivers)}")
             return "\n".join(resumen_lines)
@@ -1137,6 +1139,7 @@ class BTCForensicsPro:
                 model=self.ai_model,
                 temperature=0.1,
                 max_tokens=4096,
+                chain_name=self.chain_name,
             )
             if text:
                 return text
@@ -1184,8 +1187,8 @@ class BTCForensicsPro:
         Returns:
             Generated report text or None if failed
         """
-        prompt = f"""Eres un experto en analisis forense de Bitcoin y criptomonedas. 
-Analiza el siguiente resumen de transacciones y direcciones de Bitcoin y genera un informe forense profesional en espanol que incluya:
+        prompt = f"""Eres un experto en analisis forense de {self.chain_name} y criptomonedas. 
+Analiza el siguiente resumen de transacciones y direcciones de {self.chain_name} y genera un informe forense profesional en espanol que incluya:
 
 1. Evaluacion de riesgo general
 2. Entidades potencialmente involucradas (exchanges, mixers, servicios sancionados, etc.)
@@ -1315,7 +1318,7 @@ Informe forense:"""
                         from_addr,
                         to_addr,
                         value=max(1, amount * 1000000),  # Scale for visibility
-                        title=f"Amount: {amount:.8f} BTC<br>TXID: {txid}",
+                        title=f"Amount: {amount:.8f} {self.unit}<br>TXID: {txid}",
                         label=f"{amount:.4f}"
                     )
             
@@ -1522,22 +1525,22 @@ Informe forense:"""
             hd = structured_data.get("heatmap", {})
             if hd:
                 max_hour = max(hd, key=lambda h: hd[h].get("total_amount", 0))
-                parts.append(f"- Pico horario: {max_hour}:00 UTC ({float(hd[max_hour].get('total_amount', 0)):.4f} BTC)")
+                parts.append(f"- Pico horario: {max_hour}:00 UTC ({float(hd[max_hour].get('total_amount', 0)):.4f} {self.unit})")
                 min_hour = min(hd, key=lambda h: hd[h].get("total_amount", 0))
                 if min_hour != max_hour:
-                    parts.append(f"- Menor actividad: {min_hour}:00 UTC ({float(hd[min_hour].get('total_amount', 0)):.4f} BTC)")
+                    parts.append(f"- Menor actividad: {min_hour}:00 UTC ({float(hd[min_hour].get('total_amount', 0)):.4f} {self.unit})")
             ed = structured_data.get("entity_distribution", {})
             if ed:
                 top = sorted(ed.items(), key=lambda x: -x[1])[:5]
                 ent_str = ", ".join(f"{e}: {c}" for e, c in top)
                 parts.append(f"- Entidades: {ent_str}")
-            parts.append(f"- Recibido: {float(structured_data.get('total_in_btc', 0)):.4f} BTC")
-            parts.append(f"- Enviado: {float(structured_data.get('total_out_btc', 0)):.4f} BTC")
+            parts.append(f"- Recibido: {float(structured_data.get('total_in_btc', 0)):.4f} {self.unit}")
+            parts.append(f"- Enviado: {float(structured_data.get('total_out_btc', 0)):.4f} {self.unit}")
             parts.append(f"- Direcciones unicas: {structured_data.get('unique_addresses', 0)}")
             if parts:
                 structured_section = "Datos del analisis:\n" + "\n".join(parts)
 
-        prompt = f"""Eres un experto en analisis forense Bitcoin. Genera un informe profesional en espanol basado en estos datos.
+        prompt = f"""Eres un experto en analisis forense de {self.chain_name}. Genera un informe profesional en espanol basado en estos datos.
 
 Estructura del informe:
 1. Evaluacion de riesgo (bajo/medio/alto) - Incluye el resultado de la verificacion de sanciones

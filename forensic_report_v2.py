@@ -39,6 +39,7 @@ class EnhancedForensicReporter:
     def __init__(self, output_dir: str = "reports", chain: str = "btc"):
         self.output_dir = output_dir
         self.chain = chain
+        self.chain_name = {"btc": "Bitcoin", "eth": "Ethereum", "bch": "Bitcoin Cash", "trx": "TRON"}.get(chain, "Bitcoin")
         self.unit = "ETH" if chain == "eth" else "TRX" if chain == "trx" else "BCH" if chain == "bch" else "BTC"
 
     def generate_report_folder(
@@ -539,7 +540,7 @@ class EnhancedForensicReporter:
 </table>
 
 <div class="footer">
-    <p>Generado por HOPS - Sistema de Analisis Forense Bitcoin | {data["timestamp"]}</p>
+    <p>Generado por HOPS - Sistema de Analisis Forense {self.chain_name} | {data["timestamp"]}</p>
 </div>
 
 </body>
@@ -575,7 +576,7 @@ class EnhancedForensicReporter:
                 def header(self):
                     self.set_font("Helvetica", "B", 9)
                     self.set_text_color(100, 100, 100)
-                    self.cell(0, 6, "HOPS - Reporte Forense Bitcoin", align="R", new_x="LMARGIN", new_y="NEXT")
+                    self.cell(0, 6, f"HOPS - Reporte Forense {self.chain_name}", align="R", new_x="LMARGIN", new_y="NEXT")
                     self.line(10, self.get_y(), 200, self.get_y())
                     self.ln(3)
 
@@ -613,7 +614,7 @@ class EnhancedForensicReporter:
                 pdf.ln(30)
             pdf.set_font("Helvetica", "B", 24)
             pdf.set_text_color(13, 71, 161)
-            pdf.cell(0, 15, "Reporte Forense de Bitcoin", align="C", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 15, f"Reporte Forense de {self.chain_name}", align="C", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(5)
             pdf.set_font("Helvetica", "", 13)
             pdf.set_text_color(85, 85, 85)
