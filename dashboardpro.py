@@ -232,7 +232,7 @@ def show_risk(edges, root, chain="btc"):
         st.info("Sin datos para panel de riesgo.")
         return
 
-    unit = "ETH" if chain == "eth" else "BTC"
+    unit = "ETH" if chain == "eth" else "BCH" if chain == "bch" else "TRX" if chain == "trx" else "BTC"
     df = pd.DataFrame(edges)
     df = df[df["amount"].notnull()]
     if df.empty:
@@ -487,9 +487,9 @@ def main():
 
     # Sidebar chain selector
     with st.sidebar:
-        chain = st.selectbox("Blockchain", ["BTC", "ETH"], index=0)
+        chain = st.selectbox("Blockchain", ["BTC", "ETH", "BCH", "TRX"], index=0)
         chain = chain.lower()
-        unit = "ETH" if chain == "eth" else "BTC"
+        unit = "ETH" if chain == "eth" else "BCH" if chain == "bch" else "TRX" if chain == "trx" else "BTC"
         TRACER_PARAMS["chain"] = chain
 
     st.title(f"Dashboard Forense {unit.upper()} — Filtros avanzados + Reporte IA")
@@ -510,7 +510,7 @@ def main():
 
 
     addr_input = st.text_input(f"Dirección {unit.upper()}:", value=st.session_state.last_address or "")
-    addr = addr_input.strip()
+    addr = addr_input.strip().lower()
 
     st.markdown("### Filtros avanzados")
 
@@ -555,7 +555,14 @@ def main():
                 msg = f"No se pudieron obtener transacciones para {addr} en {unit.upper()}."
                 if detail:
                     msg += f"\n\nDetalle: {detail}"
-                msg += "\n\nVerifica que la dirección sea válida y que ETHERSCAN_API_KEY esté configurada."
+                if chain == "eth":
+                    msg += "\n\nVerifica que la dirección sea válida y que ETHERSCAN_API_KEY esté configurada."
+                elif chain == "bch":
+                    msg += "\n\nVerifica que la dirección sea válida (usa formato legacy 1... o cashaddr q...)."
+                elif chain == "trx":
+                    msg += "\n\nVerifica que la dirección sea válida (formato T...)."
+                else:
+                    msg += "\n\nVerifica que la dirección sea válida."
                 st.error(msg)
                 tracer.close()
                 return

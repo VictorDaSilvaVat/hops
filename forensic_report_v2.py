@@ -39,7 +39,7 @@ class EnhancedForensicReporter:
     def __init__(self, output_dir: str = "reports", chain: str = "btc"):
         self.output_dir = output_dir
         self.chain = chain
-        self.unit = "ETH" if chain == "eth" else "BTC"
+        self.unit = "ETH" if chain == "eth" else "TRX" if chain == "trx" else "BCH" if chain == "bch" else "BTC"
 
     def generate_report_folder(
         self,

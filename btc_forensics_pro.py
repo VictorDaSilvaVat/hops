@@ -26,6 +26,8 @@ from domain.services.reporting.forensic_report_generator import ForensicReportGe
 from infrastructure.adapters.blockstream_adapter import BlockstreamAdapter
 from infrastructure.adapters.wallet_explorer_adapter import WalletExplorerAdapter
 from infrastructure.adapters.etherscan_adapter import EtherscanAdapter
+from infrastructure.adapters.blockbook_adapter import BlockbookAdapter
+from infrastructure.adapters.trongrid_adapter import TronGridAdapter
 from infrastructure.persistence.neo4j_adapter import Neo4jAdapter
 from infrastructure.reporting.forensic_report_adapter import ForensicReportAdapter
 
@@ -120,6 +122,12 @@ class BTCForensicsPro:
         if chain == "eth":
             eth_key = self.config.api.etherscan_api_key
             self.blockchain_api = blockchain_api or EtherscanAdapter(api_key=eth_key)
+            self.wallet_api = wallet_api or WalletExplorerAdapter()
+        elif chain == "bch":
+            self.blockchain_api = blockchain_api or BlockbookAdapter()
+            self.wallet_api = wallet_api or WalletExplorerAdapter()
+        elif chain == "trx":
+            self.blockchain_api = blockchain_api or TronGridAdapter()
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         else:
             self.blockchain_api = blockchain_api or BlockstreamAdapter()
@@ -476,6 +484,10 @@ class BTCForensicsPro:
         try:
             if self.chain == "eth":
                 return self._trace_ethereum(address, hop)
+            if self.chain == "trx":
+                if direction in ("fanin", "fanout"):
+                    self.log("debug", f"TRX ignoring direction param {direction}, using both")
+                return self._trace_tron(address, hop)
             return self._trace_legacy(address, hop, direction)
         except Exception as e:
             self._last_trace_error = str(e)
@@ -496,8 +508,9 @@ class BTCForensicsPro:
         if direction == "fanout" and hop > self.max_hops:
             return False
 
-        # Evitar loops
-        key = f"{address}-{direction}-{hop}"
+        # Evitar loops (use canonical address for loop detection)
+        canonical_addr = address
+        key = f"{canonical_addr}-{direction}-{hop}"
         if key in self.processed_addresses:
             return True
         self.processed_addresses.add(key)
@@ -521,8 +534,13 @@ class BTCForensicsPro:
         try:
             address_model = self.address_analyzer.analyze_address(address)
             self.neo4j_repo.save_address(address_model)
+            # Use canonical address from the model (Blockbook may normalize legacy→cashaddr)
+            canonical_addr = address_model.address
         except Exception as e:
             self.log("error", f"Failed to analyze/save address {address}: {e}")
+            canonical_addr = address
+
+        self.log("debug", f"Using canonical address: {canonical_addr} (original input: {address})")
 
         # Process each transaction
         # NOTE: txs from get_address_txs already contain full transaction data
@@ -540,14 +558,14 @@ class BTCForensicsPro:
 
                 # Process FAN-OUT (address sends funds)
                 is_sender = any(
-                    vin.get("prevout", {}).get("scriptpubkey_address") == address
+                    vin.get("prevout", {}).get("scriptpubkey_address") == canonical_addr
                     for vin in inputs
                     if vin.get("prevout")
                 )
 
                 if direction in ("both", "fanout") and is_sender:
                     self._process_outputs(
-                        address=address,
+                        address=canonical_addr,
                         inputs=inputs,
                         outputs=outputs,
                         block_time=block_time,
@@ -559,7 +577,7 @@ class BTCForensicsPro:
                 # Process FAN-IN (address receives funds)
                 if direction in ("both", "fanin"):
                     self._process_inputs(
-                        address=address,
+                        address=canonical_addr,
                         inputs=inputs,
                         outputs=outputs,
                         block_time=block_time,
@@ -574,6 +592,8 @@ class BTCForensicsPro:
             except Exception as e:
                 self.log("error", f"Unexpected error processing transaction {txid}: {e}")
                 continue
+
+        return True
 
     def _process_outputs(self, address: str, inputs: List, outputs: List, 
                         block_time: int, hop: int, txid: str, direction: str):
@@ -601,7 +621,7 @@ class BTCForensicsPro:
                 "block_time": block_time,
                 "is_change": is_change,
                 "hop": hop,
-                "chain": "btc",
+                "chain": self.chain,
             }
 
             # Save transaction to Neo4j
@@ -644,7 +664,7 @@ class BTCForensicsPro:
                     "block_time": block_time,
                     "is_change": False,  # Inputs are never change relative to the receiver
                     "hop": hop,
-                    "chain": "btc",
+                    "chain": self.chain,
                 }
 
                 # Save transaction to Neo4j
@@ -662,7 +682,10 @@ class BTCForensicsPro:
         Determine if an output is likely a change output.
         
         An output is considered change if it goes back to one of the input wallets.
+        Only applies to BTC (WalletExplorer); other chains always return False.
         """
+        if self.chain != "btc":
+            return False
         try:
             input_wallets = set()
             for vin in inputs:
@@ -686,6 +709,7 @@ class BTCForensicsPro:
         """Trace Ethereum transactions from an address via Etherscan API V2.
         Returns True if any data was saved to Neo4j.
         """
+        address = address.lower()
         if hop > self.max_hops:
             self._last_trace_error = f"max_hops ({self.max_hops}) reached"
             return False
@@ -723,8 +747,8 @@ class BTCForensicsPro:
             if not txid:
                 continue
 
-            from_addr = tx.get("from", "")
-            to_addr = tx.get("to", "")
+            from_addr = tx.get("from", "").lower()
+            to_addr = tx.get("to", "").lower()
             value_wei = tx.get("value", 0)
             amount_eth = float(value_wei) / 1e18
             block_time = tx.get("timeStamp", 0)
@@ -769,6 +793,103 @@ class BTCForensicsPro:
                     self.neo4j_repo.save_transaction(**tx_payload)
                 except Exception as e:
                     self.log("error", f"Failed to save ETH tx {txid}: {e}")
+
+                if hop == 1:
+                    self.trace(from_addr, hop + 1, direction="fanin")
+
+        return True
+
+    # ---------------------------------------------------------
+    # TRON (TRX) TRACE
+    # ---------------------------------------------------------
+
+    def _trace_tron(self, address: str, hop: int = 1) -> bool:
+        """Trace TRON transactions from an address via TRONGRID API.
+        Returns True if any data was saved to Neo4j.
+        """
+        if hop > self.max_hops:
+            self._last_trace_error = f"max_hops ({self.max_hops}) reached"
+            return False
+
+        key = f"trx-{address}-{hop}"
+        if key in self.processed_addresses:
+            return True
+        self.processed_addresses.add(key)
+
+        try:
+            txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="trx")
+        except Exception as e:
+            msg = f"Failed to get TRX transactions for {address}: {e}"
+            self.log("error", msg)
+            self._last_trace_error = msg
+            return False
+
+        if not txs:
+            msg = f"No TRX transactions found for {address}"
+            self.log("debug", msg)
+            self._last_trace_error = msg
+            return False
+
+        self.log("info", f"Found {len(txs)} TRX transactions for {address}")
+
+        # Analyze and save the address
+        try:
+            address_model = self.address_analyzer.analyze_address(address)
+            self.neo4j_repo.save_address(address_model)
+        except Exception as e:
+            self.log("error", f"Failed to analyze/save TRX address {address}: {e}")
+
+        for tx in txs:
+            txid = tx.get("txid") or tx.get("transaction_id")
+            if not txid:
+                continue
+
+            from_addr = tx.get("from", "")
+            to_addr = tx.get("to", "")
+            value_sun = tx.get("value", 0)
+            amount_trx = float(value_sun) / 1e6
+            block_time = tx.get("timeStamp", 0) or tx.get("block_timestamp", 0)
+            tx_type = tx.get("tx_type", "transfer")
+
+            if amount_trx < self.min_amount and tx_type == "transfer":
+                continue
+
+            # FAN-OUT: address sends TRX
+            if from_addr == address and to_addr:
+                tx_payload = {
+                    "txid": txid,
+                    "from_address": address,
+                    "to_address": to_addr,
+                    "amount": amount_trx,
+                    "block_time": int(block_time) // 1000 if block_time > 1e12 else int(block_time),
+                    "is_change": False,
+                    "hop": hop,
+                    "chain": "trx",
+                }
+                try:
+                    self.neo4j_repo.save_transaction(**tx_payload)
+                except Exception as e:
+                    self.log("error", f"Failed to save TRX tx {txid}: {e}")
+
+                if tx_type == "transfer":
+                    self.trace(to_addr, hop + 1, direction="fanout")
+
+            # FAN-IN: address receives TRX
+            if to_addr == address and from_addr:
+                tx_payload = {
+                    "txid": txid,
+                    "from_address": from_addr,
+                    "to_address": address,
+                    "amount": amount_trx,
+                    "block_time": int(block_time) // 1000 if block_time > 1e12 else int(block_time),
+                    "is_change": False,
+                    "hop": hop,
+                    "chain": "trx",
+                }
+                try:
+                    self.neo4j_repo.save_transaction(**tx_payload)
+                except Exception as e:
+                    self.log("error", f"Failed to save TRX tx {txid}: {e}")
 
                 if hop == 1:
                     self.trace(from_addr, hop + 1, direction="fanin")

@@ -63,7 +63,7 @@ class AddressAnalyzerService:
         """
         self.logger.info(f"Analyzing address: {address} (chain={self.chain})")
 
-        decimals = 18 if self.chain == "eth" else 8
+        decimals = 18 if self.chain == "eth" else 6 if self.chain == "trx" else 8
 
         # Get address info from blockchain API
         address_info = self.blockchain_api.get_address_info(address, chain=self.chain)
@@ -71,17 +71,20 @@ class AddressAnalyzerService:
             self.logger.warning(f"No address info found for {address}")
             return Address(address=address, chain=self.chain, decimals=decimals)
 
+        # Use canonical address from API response (e.g., BCH cashaddr instead of legacy)
+        canonical = address_info.get("address", address)
+
         # Get wallet ID (cluster information) — only for BTC via WalletExplorer
         wallet_id = None
         wallet_info = None
         if self.chain == "btc":
-            wallet_id = self.wallet_api.get_wallet_id(address)
+            wallet_id = self.wallet_api.get_wallet_id(canonical)
             if wallet_id and wallet_id != "unknown":
                 wallet_info = self.wallet_api.get_wallet_info(wallet_id)
 
-        # Create address model
+        # Create address model with canonical address
         addr_model = Address(
-            address=address,
+            address=canonical,
             wallet_id=wallet_id,
             chain=self.chain,
             decimals=decimals,
@@ -92,7 +95,7 @@ class AddressAnalyzerService:
             tx_count = address_info.get("tx_count", 0)
             chain_stats = address_info.get("chain_stats", {}) or {}
 
-            if self.chain == "eth":
+            if self.chain in ("eth", "trx"):
                 balance = address_info.get("balance", 0)
                 addr_model.transaction_count = tx_count
                 addr_model.total_received_satoshis = balance

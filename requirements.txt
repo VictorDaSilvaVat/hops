@@ -7,3 +7,4 @@ neo4j>=5.0
 requests>=2.30
 pyvis>=0.3
 fpdf2>=2.7
+base58>=2.0
