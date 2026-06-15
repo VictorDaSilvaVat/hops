@@ -754,6 +754,8 @@ class BTCForensicsPro:
             block_time = tx.get("timeStamp", 0)
             tx_type = tx.get("tx_type", "normal")
 
+            if tx_type == "erc20":
+                continue
             if amount_eth < self.min_amount and tx_type == "normal" and amount_eth > 0:
                 continue
 

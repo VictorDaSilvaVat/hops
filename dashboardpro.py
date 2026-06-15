@@ -510,7 +510,10 @@ def main():
 
 
     addr_input = st.text_input(f"Dirección {unit.upper()}:", value=st.session_state.last_address or "")
-    addr = addr_input.strip().lower()
+    if chain == "trx":
+        addr = addr_input.strip()
+    else:
+        addr = addr_input.strip().lower()
 
     st.markdown("### Filtros avanzados")
 

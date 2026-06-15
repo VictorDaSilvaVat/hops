@@ -20,10 +20,18 @@ class BlockbookAdapter(BlockchainAPI):
         self.client = blockbook_client or BlockbookClient()
         self.logger = logger
 
-    def _strip_prefix(self, addr: Optional[str]) -> Optional[str]:
+    @staticmethod
+    def _strip_prefix(addr: Optional[str]) -> Optional[str]:
         """Strip bitcoincash: prefix from BCH addresses for consistent comparison."""
         if addr and addr.startswith("bitcoincash:"):
             return addr[len("bitcoincash:"):]
+        return addr
+
+    @staticmethod
+    def _add_prefix(addr: str) -> str:
+        """Add bitcoincash: prefix for Blockbook API if address is cashaddr."""
+        if addr and not addr.startswith("bitcoincash:") and addr.startswith(("q", "Q", "p", "P")):
+            return f"bitcoincash:{addr}"
         return addr
 
     @staticmethod
@@ -77,8 +85,9 @@ class BlockbookAdapter(BlockchainAPI):
 
     def get_address_info(self, address: str, chain: str = "bch") -> Optional[Dict[str, Any]]:
         try:
-            self.logger.debug(f"Getting address info for {address} from Blockbook")
-            data = self.client.get_address_info(address)
+            api_addr = self._add_prefix(address)
+            self.logger.debug(f"Getting address info for {api_addr} from Blockbook")
+            data = self.client.get_address_info(api_addr)
             if not data:
                 return None
 
@@ -162,8 +171,9 @@ class BlockbookAdapter(BlockchainAPI):
     def get_address_transactions(self, address: str, limit: int = 200,
                                  chain: str = "bch") -> List[Dict[str, Any]]:
         try:
-            self.logger.debug("Getting address transactions for %s from Blockbook (limit: %s)", address, limit)
-            txs = self.client.get_address_txs(address, limit=limit)
+            api_addr = self._add_prefix(address)
+            self.logger.debug("Getting address transactions for %s from Blockbook (limit: %s)", api_addr, limit)
+            txs = self.client.get_address_txs(api_addr, limit=limit)
             return [self._normalize_tx(tx) for tx in txs if tx]
         except RateLimitError as e:
             self.logger.warning("Rate limit hit getting transactions for %s, waiting %ds...", address, e.retry_after or 2)
