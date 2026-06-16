@@ -921,10 +921,7 @@ def main():
         placeholder=f"Ingrese una dirección de {unit.upper()}...",
         label_visibility="collapsed",
     )
-    if chain == "trx":
-        addr = addr_input.strip()
-    else:
-        addr = addr_input.strip().lower()
+    addr = addr_input.strip()
 
     # Filters
     st.markdown('<div class="filter-card"><h3>⚙️ Filtros de análisis</h3>', unsafe_allow_html=True)
