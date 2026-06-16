@@ -24,8 +24,8 @@ def is_valid_trx_address(addr: str) -> bool:
     if len(addr) != 34 or not addr.startswith("T"):
         return False
     try:
-        decoded = base58.b58decode(addr)
-        return len(decoded) == 25 and decoded[0] == 0x41
+        decoded = base58.b58decode_check(addr)
+        return len(decoded) == 21 and decoded[0] == 0x41
     except Exception:
         return False
 
@@ -42,8 +42,8 @@ def is_valid_btc_address(addr: str) -> bool:
         if len(addr) < 26 or len(addr) > 35:
             return False
         try:
-            decoded = base58.b58decode(addr)
-            return len(decoded) >= 25
+            decoded = base58.b58decode_check(addr)
+            return len(decoded) == 21
         except Exception:
             return False
     return False
@@ -848,6 +848,7 @@ def main():
                                                       key=f"ent_{addr}", label_visibility="collapsed")
                         if st.button("Guardar", key=f"save_{addr}", use_container_width=True):
                             parsed = [x.strip() for x in new_labels.split(",") if x.strip()]
+                            parsed = list(dict.fromkeys(parsed))
                             driver2 = get_driver()
                             with driver2.session() as s2:
                                 s2.run("""

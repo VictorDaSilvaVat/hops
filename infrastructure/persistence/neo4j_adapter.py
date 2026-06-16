@@ -45,6 +45,7 @@ class Neo4jAdapter(Neo4jRepository):
             with self.driver.session() as session:
                 # Convert EntityType enum to string for storage
                 entity_type_str = address.entity_type.value if address.entity_type else "unknown"
+                labels = list(dict.fromkeys(address.labels)) if address.labels else []
                 
                 query = """
                 MERGE (a:Address {address: $address})
@@ -73,7 +74,7 @@ class Neo4jAdapter(Neo4jRepository):
                                    wallet_id=address.wallet_id,
                                    entity_type=entity_type_str,
                                    entity_confidence=address.entity_confidence,
-                                   labels=address.labels,
+                                    labels=labels,
                                    first_seen=address.first_seen,
                                    last_seen=address.last_seen,
                                    transaction_count=address.transaction_count,
@@ -127,6 +128,7 @@ class Neo4jAdapter(Neo4jRepository):
                     from.updated_at = datetime()
                 SET from.chain = coalesce(from.chain, $chain),
                     from.entity_type = coalesce(from.entity_type, "unknown"),
+                    from.labels = coalesce(from.labels, []),
                     from.updated_at = datetime()
                 
                 // Ensure destination address exists  
@@ -139,8 +141,9 @@ class Neo4jAdapter(Neo4jRepository):
                     to.updated_at = datetime()
                 SET to.chain = coalesce(to.chain, $chain),
                     to.entity_type = coalesce(to.entity_type, "unknown"),
+                    to.labels = coalesce(to.labels, []),
                     to.updated_at = datetime()
-                
+
                 // Create or update transaction relationship
                 MERGE (from)-[r:SENT {txid: $txid}]->(to)
                 SET r.amount = $amount,
@@ -151,7 +154,7 @@ class Neo4jAdapter(Neo4jRepository):
                     r.updated_at = datetime()
                 RETURN r.txid as txid
                 """
-                
+
                 result = session.run(query,
                                    from_address=from_address,
                                    to_address=to_address,
@@ -161,7 +164,7 @@ class Neo4jAdapter(Neo4jRepository):
                                    is_change=is_change,
                                    hop=hop,
                                    chain=chain)
-                
+
                 record = result.single()
                 if record:
                     self.logger.debug(f"Saved transaction: {record['txid']} from {from_address} to {to_address}")
@@ -169,7 +172,7 @@ class Neo4jAdapter(Neo4jRepository):
                 else:
                     self.logger.warning(f"No record returned when saving transaction: {txid}")
                     return False
-                    
+
         except Exception as e:
             self.logger.error(f"Error saving transaction {txid} from {from_address} to {to_address}: {e}")
             return False
@@ -439,6 +442,7 @@ class Neo4jAdapter(Neo4jRepository):
     def update_address_labels(self, address: str, labels: List[str], entity_type: Optional[str] = None,
                                chain: Optional[str] = None) -> bool:
         """Manually update labels and/or entity_type for an address."""
+        labels = list(dict.fromkeys(labels)) if labels else []  # deduplicate
         try:
             with self.driver.session() as session:
                 query = """
