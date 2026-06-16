@@ -94,9 +94,13 @@ class BlockstreamClient(BaseAPIClient):
                 return len(address) >= 42
             # Legacy/P2SH: validate checksum
             try:
-                import base58
-                decoded = base58.b58decode_check(address)
-                return len(decoded) == 21
+                import base58, hashlib
+                raw = base58.b58decode(address)
+                if len(raw) != 25:
+                    return False
+                data, checksum = raw[:-4], raw[-4:]
+                h = hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
+                return h == checksum
             except Exception:
                 return False
             

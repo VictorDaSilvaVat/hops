@@ -24,8 +24,12 @@ def is_valid_trx_address(addr: str) -> bool:
     if len(addr) != 34 or not addr.startswith("T"):
         return False
     try:
-        decoded = base58.b58decode_check(addr)
-        return len(decoded) == 21 and decoded[0] == 0x41
+        raw = base58.b58decode(addr)
+        if len(raw) != 25:
+            return False
+        data, checksum = raw[:-4], raw[-4:]
+        h = hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
+        return h == checksum and data[0] == 0x41
     except Exception:
         return False
 
@@ -49,8 +53,22 @@ def _btc_validation_error(addr: str) -> str:
             return f"Muy corta ({len(addr)} chars, mínimo 26 para legacy/P2SH)."
         if len(addr) > 35:
             return f"Muy larga ({len(addr)} chars, máximo 35 para legacy/P2SH)."
-        return "Checksum inválido — la dirección no es una dirección Bitcoin válida."
+        if not _check_btc_checksum(addr):
+            return "Checksum inválido — la dirección no es una dirección Bitcoin válida."
+        return "Formato inválido para dirección legacy/P2SH."
     return "Debe comenzar con 1, 3 o bc1 (mainnet)."
+
+def _check_btc_checksum(addr: str) -> bool:
+    """Verify Bitcoin address checksum (double SHA-256)."""
+    try:
+        raw = base58.b58decode(addr)
+        if len(raw) != 25:
+            return False
+        data, checksum = raw[:-4], raw[-4:]
+        h = hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
+        return h == checksum
+    except Exception:
+        return False
 
 def is_valid_btc_address(addr: str) -> bool:
     if not addr:
@@ -62,11 +80,7 @@ def is_valid_btc_address(addr: str) -> bool:
     if addr.startswith("1") or addr.startswith("3"):
         if len(addr) < 26 or len(addr) > 35:
             return False
-        try:
-            decoded = base58.b58decode_check(addr)
-            return len(decoded) == 21
-        except Exception:
-            return False
+        return _check_btc_checksum(addr)
     return False
 
 def is_valid_eth_address(addr: str) -> bool:
