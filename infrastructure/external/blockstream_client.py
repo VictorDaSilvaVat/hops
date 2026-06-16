@@ -90,19 +90,14 @@ class BlockstreamClient(BaseAPIClient):
         # Direcciones P2SH (comienzan con 3)
         # Direcciones Bech32 (comienzan con bc1)
         if address.startswith(('1', '3', 'bc1')):
+            if len(address) < 26 or len(address) > 62:
+                return False
             if address.startswith('bc1'):
                 return len(address) >= 42
-            # Legacy/P2SH: validate checksum
-            try:
-                import base58, hashlib
-                raw = base58.b58decode(address)
-                if len(raw) != 25:
-                    return False
-                data, checksum = raw[:-4], raw[-4:]
-                h = hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
-                return h == checksum
-            except Exception:
-                return False
+            # Legacy/P2SH: just check valid base58 characters with simple alnum check
+            # (exclude 0,O,I,l which are not in base58)
+            valid_chars = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+            return all(c in valid_chars for c in address)
             
         # Otros formatos menos comunes pero válidos
         if address.startswith(('m', 'n', '2', 'mb', 'nb')):  # Testnet

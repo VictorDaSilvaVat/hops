@@ -35,8 +35,9 @@ def is_valid_trx_address(addr: str) -> bool:
 
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
+BASE58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
 def _btc_validation_error(addr: str) -> str:
-    """Return a specific error message for why a BTC address is invalid."""
     if not addr:
         return "Dirección vacía."
     if addr.startswith(("bc1", "BC1")):
@@ -50,37 +51,23 @@ def _btc_validation_error(addr: str) -> str:
         return "Formato bech32 inválido."
     if addr.startswith(("1", "3")):
         if len(addr) < 26:
-            return f"Muy corta ({len(addr)} chars, mínimo 26 para legacy/P2SH)."
+            return f"Muy corta ({len(addr)} chars, mínimo 26)."
         if len(addr) > 35:
-            return f"Muy larga ({len(addr)} chars, máximo 35 para legacy/P2SH)."
-        if not _check_btc_checksum(addr):
-            return "Checksum inválido — la dirección no es una dirección Bitcoin válida."
-        return "Formato inválido para dirección legacy/P2SH."
+            return f"Muy larga ({len(addr)} chars, máximo 35)."
+        bad = [c for c in addr if c not in BASE58_CHARS]
+        if bad:
+            return f"Caracteres inválidos (0,O,I,l no son válidos en base58): {set(bad)}."
+        return "Error de checksum — Blockstream la rechazó como inválida."
     return "Debe comenzar con 1, 3 o bc1 (mainnet)."
 
-def _check_btc_checksum(addr: str) -> bool:
-    """Verify Bitcoin address checksum (double SHA-256)."""
-    try:
-        raw = base58.b58decode(addr)
-        if len(raw) != 25:
-            return False
-        data, checksum = raw[:-4], raw[-4:]
-        h = hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
-        return h == checksum
-    except Exception:
-        return False
-
 def is_valid_btc_address(addr: str) -> bool:
+    """Basic format check (prefix + length + base58 charset). API validates checksum."""
     if not addr:
         return False
     if addr.startswith("bc1") or addr.startswith("BC1"):
-        if len(addr) < 42 or len(addr) > 62:
-            return False
-        return all(c in BECH32_CHARSET for c in addr[3:].lower())
+        return 42 <= len(addr) <= 62 and all(c in BECH32_CHARSET for c in addr[3:].lower())
     if addr.startswith("1") or addr.startswith("3"):
-        if len(addr) < 26 or len(addr) > 35:
-            return False
-        return _check_btc_checksum(addr)
+        return 26 <= len(addr) <= 35 and all(c in BASE58_CHARS for c in addr)
     return False
 
 def is_valid_eth_address(addr: str) -> bool:
