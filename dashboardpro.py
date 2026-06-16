@@ -31,6 +31,27 @@ def is_valid_trx_address(addr: str) -> bool:
 
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
+def _btc_validation_error(addr: str) -> str:
+    """Return a specific error message for why a BTC address is invalid."""
+    if not addr:
+        return "Dirección vacía."
+    if addr.startswith(("bc1", "BC1")):
+        if len(addr) < 42:
+            return f"Muy corta ({len(addr)} chars, mínimo 42 para bech32)."
+        if len(addr) > 62:
+            return f"Muy larga ({len(addr)} chars, máximo 62)."
+        bad = [c for c in addr[3:].lower() if c not in BECH32_CHARSET]
+        if bad:
+            return f"Caracteres inválidos en bech32: {set(bad)}."
+        return "Formato bech32 inválido."
+    if addr.startswith(("1", "3")):
+        if len(addr) < 26:
+            return f"Muy corta ({len(addr)} chars, mínimo 26 para legacy/P2SH)."
+        if len(addr) > 35:
+            return f"Muy larga ({len(addr)} chars, máximo 35 para legacy/P2SH)."
+        return "Checksum inválido — la dirección no es una dirección Bitcoin válida."
+    return "Debe comenzar con 1, 3 o bc1 (mainnet)."
+
 def is_valid_btc_address(addr: str) -> bool:
     if not addr:
         return False
@@ -69,7 +90,7 @@ def is_valid_bch_address(addr: str) -> bool:
 def validate_address(addr: str, chain: str) -> tuple[bool, str]:
     """Returns (is_valid, error_message)."""
     validators = {
-        "btc": (is_valid_btc_address, "Debe comenzar con 1, 3 o bc1 (26-62 caracteres)."),
+        "btc": (is_valid_btc_address, _btc_validation_error(addr)),
         "eth": (is_valid_eth_address, "Debe ser 0x seguido de 40 caracteres hex (a-f, 0-9)."),
         "bch": (is_valid_bch_address, "Debe ser cashaddr (q/p...) o legacy (1/3...)."),
         "trx": (is_valid_trx_address, "Debe comenzar con T y tener 34 caracteres base58."),
