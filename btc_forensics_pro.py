@@ -1698,3 +1698,206 @@ Informe forense:"""
 
         self.log("info", f"Enhanced report generated: {result.get('folder')}")
         return result
+
+    def _load_skill_file(self, filename: str) -> str:
+        """Load a skill reference markdown file from references/crypto-forensics/."""
+        import os as _os
+        base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "references", "crypto-forensics")
+        path = _os.path.join(base, filename)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            self.log("warning", f"Could not load skill file {filename}: {e}")
+            return f"[{filename} no disponible]"
+
+    def generate_forensic_pericial_report(
+        self,
+        address: str,
+        filters: Optional[Dict] = None,
+        depth: int = 2,
+        model: str = "llama3",
+        case_data: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate a forensic expert report for Spanish/UE courts.
+
+        Uses the crypto-forensics skill (plantilla-informe.md, exchanges-kyc-ue.md,
+        glosario-juridico.md) to produce a legally structured expert witness report
+        following the 10-section template required for Spanish judicial proceedings.
+
+        Args:
+            address: Blockchain address to analyze
+            filters: Dashboard filters (min_amount, etc.)
+            depth: Neo4j traversal depth
+            model: AI model name
+            case_data: Dict with case info (victim_name, case_number, court, etc.)
+
+        Returns:
+            Dict with paths to all generated files
+        """
+        from forensic_report_v2 import EnhancedForensicReporter
+
+        self.log("info", f"Generating forensic pericial report for {address}")
+
+        # 1. Collect edge data from Neo4j
+        edges = self.collect_edge_data(address, depth=depth)
+        if not edges:
+            self.log("warning", f"No edge data found for {address}")
+            return {"error": "No hay datos de transacciones en Neo4j para esta direccion."}
+
+        # 2. Apply filters
+        if filters:
+            min_amount = filters.get("min_amount", 0.00001)
+            edges = [e for e in edges if float(e.get("amount", 0)) >= min_amount]
+            if filters.get("hide_change"):
+                edges = [e for e in edges if not e.get("is_change", False)]
+            if filters.get("only_hop1"):
+                edges = [e for e in edges if e.get("hop") == 1]
+            if filters.get("only_fanin"):
+                edges = [e for e in edges if e.get("to_addr") == address]
+            if filters.get("only_fanout"):
+                edges = [e for e in edges if e.get("from_addr") == address]
+
+        if not edges:
+            return {"error": "No quedan datos tras aplicar los filtros."}
+
+        # 3. Build text summary
+        resumen = self.build_summary(address)
+
+        # 4. Build structured data
+        df = pd.DataFrame(edges) if edges else pd.DataFrame()
+        ed = {}
+        if not df.empty:
+            all_entities = []
+            for col in ["from_entity", "to_entity"]:
+                if col in df.columns:
+                    all_entities.extend(df[col].dropna().tolist())
+            for ent in set(all_entities):
+                ed[ent] = all_entities.count(ent)
+
+        total_in = total_out = 0.0
+        if not df.empty and "amount" in df.columns:
+            df_a = df[df["amount"].notna()]
+            if "to_addr" in df_a.columns:
+                total_in = df_a[df_a["to_addr"] == address]["amount"].sum()
+            if "from_addr" in df_a.columns:
+                total_out = df_a[df_a["from_addr"] == address]["amount"].sum()
+
+        sanctions_result = self.check_sanctions(address)
+
+        # 5. Load skill references
+        plantilla = self._load_skill_file("plantilla-informe.md")
+        exchanges_ref = self._load_skill_file("exchanges-kyc-ue.md")
+        glosario = self._load_skill_file("glosario-juridico.md")
+
+        # 6. Build structured data section for prompt
+        parts = []
+        san = sanctions_result or {}
+        if san.get("sanctioned") is True:
+            parts.append("*** SANCIONADO *** La direccion aparece en listas de sanciones.")
+        elif san.get("sanctioned") is False:
+            parts.append("- Sin sanciones conocidas.")
+        else:
+            parts.append("- Sanciones: no se pudo verificar.")
+        matches = san.get("matches", [])
+        if matches:
+            for m in matches[:5]:
+                parts.append(f"  - Coincidencia: {m}")
+
+        if ed:
+            top = sorted(ed.items(), key=lambda x: -x[1])[:5]
+            ent_str = ", ".join(f"{e}: {c}" for e, c in top)
+            parts.append(f"- Entidades: {ent_str}")
+        parts.append(f"- Total recibido: {total_in:.4f} {self.unit}")
+        parts.append(f"- Total enviado: {total_out:.4f} {self.unit}")
+        unique_addrs = int(df["from_addr"].nunique() + df["to_addr"].nunique()) if not df.empty else 0
+        parts.append(f"- Direcciones unicas: {unique_addrs}")
+        parts.append(f"- Red: {self.chain_name} ({self.unit})")
+
+        if edges:
+            parts.append("")
+            parts.append("TABLA DE HOPS (flujo de fondos):")
+            parts.append("HOP | HASH | FECHA | ORIGEN | DESTINO | IMPORTE | ETIQUETA DESTINO")
+            for i, e in enumerate(edges[:80]):
+                hop = e.get("hop", i + 1)
+                txid = (e.get("txid") or "")[:20]
+                ts = e.get("ts", 0)
+                fecha = datetime.utcfromtimestamp(int(ts)).strftime("%d/%m/%Y") if ts else "N/A"
+                from_a = (e.get("from_addr") or "")[:20]
+                to_a = (e.get("to_addr") or "")[:20]
+                amt = float(e.get("amount") or 0)
+                label = (e.get("to_entity") or "sin etiqueta") or "sin etiqueta"
+                parts.append(f"{hop} | {txid}... | {fecha} | {from_a}... | {to_a}... | {amt:.4f} | {label}")
+
+        structured_section = "\n".join(parts)
+
+        # 7. Build case data section
+        case_lines = [
+            f"- Direccion analizada: {address}",
+        ]
+        if case_data:
+            for k, v in case_data.items():
+                if v:
+                    case_lines.append(f"- {k}: {v}")
+        case_section = "\n".join(case_lines)
+
+        # 8. Build the specialized prompt
+        prompt = f"""Eres un perito forense especializado en analisis de blockchain y criptomonedas, con habilitacion para emitir informes periciales para procedimientos judiciales en Espana y la Union Europea.
+
+Debes generar un INFORME PERICIAL SOBRE ANALISIS FORENSE DE ACTIVOS DIGITALES siguiendo EXACTAMENTE la estructura de la plantilla proporcionada.
+
+DATOS DEL CASO:
+{case_section}
+
+DATOS DEL ANALISIS ON-CHAIN:
+{structured_section}
+
+TRANSACCIONES:
+{resumen}
+
+RESULTADO DE VERIFICACION DE SANCIONES:
+{json.dumps(sanctions_result, indent=2, ensure_ascii=False)}
+
+A continuacion tienes la PLANTILLA que debes seguir EXACTAMENTE. Cada seccion numerada debe aparecer en el informe. Rellena los datos entre corchetes con la informacion real del analisis. No inventes datos que no esten en las transacciones reales.
+
+=== PLANTILLA DEL INFORME PERICIAL ===
+{plantilla}
+
+=== REFERENCIAS DE EXCHANGES KYC ===
+{exchanges_ref}
+
+=== GLOSARIO JURIDICO ===
+{glosario}
+
+Genera el informe pericial completo en espanol. Usa lenguaje formal y tecnico-juridico apropiado para un procedimiento judicial."""
+
+        # 9. Call AI
+        old_model = self.ai_model
+        if model != "llama3":
+            self.ai_model = model
+        try:
+            pericial_narrative = self._call_ai_api(prompt, timeout=300)
+        finally:
+            if model != "llama3":
+                self.ai_model = old_model
+
+        if not pericial_narrative:
+            pericial_narrative = "No se pudo generar el informe pericial. Verifique que el proveedor AI este disponible."
+
+        # 10. Generate transaction graph HTML
+        graph_html = self.generate_transaction_graph_html(address, limit=100)
+
+        # 11. Generate report folder
+        reporter = EnhancedForensicReporter(output_dir="reports", chain=self.chain)
+        result = reporter.generate_report_folder(
+            address=address,
+            edges=edges,
+            ollama_narrative=pericial_narrative,
+            transaction_graph_html=graph_html,
+            filters=filters,
+            sanctions=sanctions_result,
+        )
+
+        self.log("info", f"Forensic pericial report generated: {result.get('folder')}")
+        return result
