@@ -7,6 +7,7 @@ import os
 import json
 import base64
 import logging
+import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -18,6 +19,33 @@ import networkx as nx
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+RE_UNSAFE_PDF = re.compile(r'[^\x20-\x7E\x80-\xFF\u00C0-\u024F\u0400-\u04FF\u2000-\u206F\u20A0-\u20CF\u2100-\u214F\u2150-\u218F\u2190-\u21FF\u2200-\u22FF\u2300-\u23FF\u2500-\u257F\u2580-\u259F]')
+
+def sanitize_for_pdf(text: str) -> str:
+    """Replace Unicode chars unsupported by Helvetica with ASCII equivalents."""
+    replacements = {
+        "\u2014": "---",  # em dash
+        "\u2013": "--",   # en dash
+        "\u2018": "'", "\u2019": "'",  # smart single quotes
+        "\u201c": '"', "\u201d": '"',  # smart double quotes
+        "\u2026": "...",  # ellipsis
+        "\u2022": "-",    # bullet
+        "\u2023": ">",    # triangular bullet
+        "\u25E6": "o",    # white bullet
+        "\u2032": "'",    # prime
+        "\u2033": "''",   # double prime
+        "\u00A0": " ",    # non-breaking space
+        "\u00AB": "<<",   # left-pointing double angle
+        "\u00BB": ">>",   # right-pointing double angle
+        "\u00B7": "*",    # middle dot
+        "\u00D7": "x",    # multiplication sign
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    # Remove remaining non-Latin1 characters
+    text = RE_UNSAFE_PDF.sub("", text)
+    return text
 
 # Find the logo file (check multiple possible locations)
 REPORT_LOGO_PATHS = [
@@ -601,7 +629,7 @@ class EnhancedForensicReporter:
                 def body_text(self, text):
                     self.set_font("Helvetica", "", 9)
                     self.set_text_color(34, 34, 34)
-                    self.multi_cell(0, 5, text)
+                    self.multi_cell(0, 5, sanitize_for_pdf(text))
                     self.ln(3)
 
             pdf = PDF(chain_name=self.chain_name)
@@ -673,6 +701,7 @@ class EnhancedForensicReporter:
             # --- Ollama Narrative ---
             narrative = data.get("ollama_narrative", "")
             if narrative:
+                narrative = sanitize_for_pdf(narrative)
                 pdf.section_title("3. Analisis Forense IA")
                 for para in narrative.split("\n\n"):
                     para = para.strip()

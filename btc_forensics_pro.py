@@ -1348,7 +1348,7 @@ Informe forense:"""
     # SANCTIONS API
     # ---------------------------------------------------------
 
-    SANCTIONS_API_URL = "https://wass.pasarelalabmoon.ddns.net/api/sanctions/crypto"
+    SANCTIONS_API_URL = "https://wass.wemsys.es/api/sanctions/crypto"
 
     def check_sanctions(self, address: str) -> Dict[str, Any]:
         """
@@ -1842,8 +1842,11 @@ Informe forense:"""
             from_a = (e.get("from_addr") or "")[:25]
             to_a = (e.get("to_addr") or "")[:25]
             amt = float(e.get("amount") or 0)
-            label = (e.get("to_entity") or "sin etiqueta") or "sin etiqueta"
-            hops_table.append(f"{hop},{txid},{fecha},{from_a},{to_a},{amt:.4f},{label}")
+            from_labels_list = e.get("from_labels") or []
+            to_labels_list = e.get("to_labels") or []
+            from_label = from_labels_list[0] if from_labels_list else ""
+            to_label = to_labels_list[0] if to_labels_list else ""
+            hops_table.append(f"{hop},{txid},{fecha},{from_a},{to_a},{amt:.4f},{from_label},{to_label}")
 
         structured_section = "\n".join(parts)
         hops_csv = "\n".join(hops_table)
