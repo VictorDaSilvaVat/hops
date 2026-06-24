@@ -1783,94 +1783,109 @@ Informe forense:"""
                 total_in = df_a[df_a["to_addr"] == address]["amount"].sum()
             if "from_addr" in df_a.columns:
                 total_out = df_a[df_a["from_addr"] == address]["amount"].sum()
+        unique_addrs = int(df["from_addr"].nunique() + df["to_addr"].nunique()) if not df.empty else 0
 
         sanctions_result = self.check_sanctions(address)
 
-        # 5. Load skill references
+        # 5. Load skill references and build concise context
         plantilla = self._load_skill_file("plantilla-informe.md")
         exchanges_ref = self._load_skill_file("exchanges-kyc-ue.md")
         glosario = self._load_skill_file("glosario-juridico.md")
+
+        # Extract just section headers from plantilla (reduce prompt size)
+        secciones = []
+        for line in plantilla.split("\n"):
+            if line.strip().startswith("## SECCI") or line.strip().startswith("###"):
+                secciones.append(line.strip().lstrip("#").strip())
+        estructura = "\n".join(f"{i+1}. {s}" for i, s in enumerate(secciones))
+
+        # Trim exchanges to just exchange names + countries
+        exchanges_resumen = []
+        for line in exchanges_ref.split("\n"):
+            line = line.strip()
+            if line.startswith("## "):
+                exchanges_resumen.append(line.strip("# "))
+            if "**País de registro:**" in line or "**Regulador:**" in line or "**Nombre legal:**" in line:
+                exchanges_resumen.append("  " + line.strip("* "))
+        exchanges_short = "\n".join(exchanges_resumen)
 
         # 6. Build structured data section for prompt
         parts = []
         san = sanctions_result or {}
         if san.get("sanctioned") is True:
-            parts.append("*** SANCIONADO *** La direccion aparece en listas de sanciones.")
+            parts.append("SANCIONES: Aparece en listas de sanciones.")
         elif san.get("sanctioned") is False:
-            parts.append("- Sin sanciones conocidas.")
+            parts.append("SANCIONES: Sin sanciones conocidas.")
         else:
-            parts.append("- Sanciones: no se pudo verificar.")
+            parts.append("SANCIONES: No se pudo verificar.")
         matches = san.get("matches", [])
         if matches:
-            for m in matches[:5]:
-                parts.append(f"  - Coincidencia: {m}")
+            for m in matches[:3]:
+                parts.append(f"  Coincidencia: {m}")
 
         if ed:
             top = sorted(ed.items(), key=lambda x: -x[1])[:5]
             ent_str = ", ".join(f"{e}: {c}" for e, c in top)
-            parts.append(f"- Entidades: {ent_str}")
-        parts.append(f"- Total recibido: {total_in:.4f} {self.unit}")
-        parts.append(f"- Total enviado: {total_out:.4f} {self.unit}")
-        unique_addrs = int(df["from_addr"].nunique() + df["to_addr"].nunique()) if not df.empty else 0
-        parts.append(f"- Direcciones unicas: {unique_addrs}")
-        parts.append(f"- Red: {self.chain_name} ({self.unit})")
+            parts.append(f"Entidades: {ent_str}")
+        parts.append(f"Total recibido: {total_in:.4f} {self.unit}")
+        parts.append(f"Total enviado: {total_out:.4f} {self.unit}")
+        parts.append(f"Direcciones unicas: {unique_addrs}")
+        parts.append(f"Red: {self.chain_name} ({self.unit})")
 
-        if edges:
-            parts.append("")
-            parts.append("TABLA DE HOPS (flujo de fondos):")
-            parts.append("HOP | HASH | FECHA | ORIGEN | DESTINO | IMPORTE | ETIQUETA DESTINO")
-            for i, e in enumerate(edges[:80]):
-                hop = e.get("hop", i + 1)
-                txid = (e.get("txid") or "")[:20]
-                ts = e.get("ts", 0)
-                fecha = datetime.utcfromtimestamp(int(ts)).strftime("%d/%m/%Y") if ts else "N/A"
-                from_a = (e.get("from_addr") or "")[:20]
-                to_a = (e.get("to_addr") or "")[:20]
-                amt = float(e.get("amount") or 0)
-                label = (e.get("to_entity") or "sin etiqueta") or "sin etiqueta"
-                parts.append(f"{hop} | {txid}... | {fecha} | {from_a}... | {to_a}... | {amt:.4f} | {label}")
+        # Build hops table as CSV-like data
+        hops_table = []
+        for i, e in enumerate(edges[:60]):
+            hop = e.get("hop", i + 1)
+            txid = (e.get("txid") or "")[:20]
+            ts = e.get("ts", 0)
+            fecha = datetime.utcfromtimestamp(int(ts)).strftime("%d/%m/%Y") if ts else "N/A"
+            from_a = (e.get("from_addr") or "")[:25]
+            to_a = (e.get("to_addr") or "")[:25]
+            amt = float(e.get("amount") or 0)
+            label = (e.get("to_entity") or "sin etiqueta") or "sin etiqueta"
+            hops_table.append(f"{hop},{txid},{fecha},{from_a},{to_a},{amt:.4f},{label}")
 
         structured_section = "\n".join(parts)
+        hops_csv = "\n".join(hops_table)
 
         # 7. Build case data section
-        case_lines = [
-            f"- Direccion analizada: {address}",
-        ]
+        case_lines = [f"Direccion analizada: {address}"]
         if case_data:
             for k, v in case_data.items():
                 if v:
-                    case_lines.append(f"- {k}: {v}")
+                    case_lines.append(f"{k}: {v}")
         case_section = "\n".join(case_lines)
 
-        # 8. Build the specialized prompt
-        prompt = f"""Eres un perito forense especializado en analisis de blockchain y criptomonedas, con habilitacion para emitir informes periciales para procedimientos judiciales en Espana y la Union Europea.
-
-Debes generar un INFORME PERICIAL SOBRE ANALISIS FORENSE DE ACTIVOS DIGITALES siguiendo EXACTAMENTE la estructura de la plantilla proporcionada.
+        # 8. Build prompt — short and directive
+        prompt = f"""Eres un perito forense de blockchain. Genera un informe pericial para tribunales espanoles/UE.
 
 DATOS DEL CASO:
 {case_section}
 
-DATOS DEL ANALISIS ON-CHAIN:
+DATOS ON-CHAIN:
 {structured_section}
 
-TRANSACCIONES:
+TABLA DE HOPS (HOP,HASH,FECHA,ORIGEN,DESTINO,CANTIDAD,ETIQUETA):
+{hops_csv}
+
+TRANSACCIONES (resumen):
 {resumen}
 
-RESULTADO DE VERIFICACION DE SANCIONES:
+SANCIONES:
 {json.dumps(sanctions_result, indent=2, ensure_ascii=False)}
 
-A continuacion tienes la PLANTILLA que debes seguir EXACTAMENTE. Cada seccion numerada debe aparecer en el informe. Rellena los datos entre corchetes con la informacion real del analisis. No inventes datos que no esten en las transacciones reales.
+ESTRUCTURA QUE DEBES SEGUIR:
+{estructura}
 
-=== PLANTILLA DEL INFORME PERICIAL ===
-{plantilla}
+REFERENCIAS DE EXCHANGES:
+{exchanges_short}
 
-=== REFERENCIAS DE EXCHANGES KYC ===
-{exchanges_ref}
-
-=== GLOSARIO JURIDICO ===
-{glosario}
-
-Genera el informe pericial completo en espanol. Usa lenguaje formal y tecnico-juridico apropiado para un procedimiento judicial."""
+INSTRUCCIONES:
+1. Genera SOLO el informe completo, sin notas ni explicaciones.
+2. Sigue EXACTAMENTE la estructura numerada de 10 secciones.
+3. Rellena los datos reales del analisis. Si falta un dato, pon "No disponible" NO inventes.
+4. Usa lenguaje formal y tecnico-juridico.
+5. NO incluyas ningun texto fuera del informe (no pienses en voz alta)."""
 
         # 9. Call AI
         old_model = self.ai_model
