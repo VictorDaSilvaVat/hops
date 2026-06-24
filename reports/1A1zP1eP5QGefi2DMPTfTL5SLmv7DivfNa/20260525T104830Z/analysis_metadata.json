@@ -1,0 +1,367 @@
+{
+  "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+  "timestamp": "2026-05-25T10:48:30.063328",
+  "total_transactions": 41,
+  "total_in_btc": 0.021418419999999997,
+  "total_out_btc": 0.0,
+  "unique_addresses": 38,
+  "entity_distribution": {
+    "individual": 41
+  },
+  "timeline": [
+    {
+      "datetime": "2026-05-03T12:38:32",
+      "amount": 2e-05,
+      "from": "bc1qjw9yu3ywsrw0pdgj9hrqvvuvwf8dv6k64r9d0p",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "25116b35ee7a0a9270f0969d2585310271ae487b468cf37b61be5b8174b30a99"
+    },
+    {
+      "datetime": "2026-05-04T00:48:43",
+      "amount": 1.503e-05,
+      "from": "bc1q40k87adh8ykzh0t5csv5ua53xc6vcpqsshgxc49yerpr6j39tgjsky0k7e",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "13a907c539734b2ab8e7065b2be4296c2985d30eea386f1609cd178233702aa1"
+    },
+    {
+      "datetime": "2026-05-04T03:55:30",
+      "amount": 1.464e-05,
+      "from": "bc1p8zl0stxvu66la08k7maxglerfcxhyc6z6nuqjqmw98ywsr8uev2qsvy37d",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "335e3181a62e3941d69d9f46af9b50f5d614d2005fa20c19201293529a18987f"
+    },
+    {
+      "datetime": "2026-05-04T07:58:42",
+      "amount": 0.00020518,
+      "from": "bc1qujepl0k5n0ga2e86yskvxa6auehpf6dlf84dx0",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "a0db3b4ba5fc6e618101e1107b22c0f3151fb2804aa7c9021d6c8ca71dbcaf3b"
+    },
+    {
+      "datetime": "2026-05-04T14:54:17",
+      "amount": 1.254e-05,
+      "from": "14CQCSES2PE7yCicighXhQ7HtTmykJushT",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "99e6104b53e6c873657c950cc5745ae8e27e11c2a965886e3ef4078384afbf0b"
+    },
+    {
+      "datetime": "2026-05-04T21:24:36",
+      "amount": 7.5e-05,
+      "from": "bc1qru5qqlndzyy2fpax55403npeqh3gm0csc7nx3h",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "b0912a966e1a26ceea0939dc0bc8fd11ab82dad670c676284380af62065c1fb9"
+    },
+    {
+      "datetime": "2026-05-05T06:45:37",
+      "amount": 0.00096234,
+      "from": "bc1qee2vagt065kjla9v5g45wzcswlppmfjnx5r39w",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "06cd317d2bdf21d3a2a36243c7745360cc27a8a341b830158d764a3f173d7010"
+    },
+    {
+      "datetime": "2026-05-05T12:47:38",
+      "amount": 1.442e-05,
+      "from": "bc1qcj9s7pae9zg8k4wlsqj7wpdwr4p728vek8lt53",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "4607a61c521f84d17401e45faa0e73a9ecd45bbbc17febb541268c545a5099ca"
+    },
+    {
+      "datetime": "2026-05-05T12:47:38",
+      "amount": 1.442e-05,
+      "from": "bc1qcj9s7pae9zg8k4wlsqj7wpdwr4p728vek8lt53",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "21c86fe1595a7dbba5d447a4304291d8d623ae4da6eedf50cec609b7576ed3aa"
+    },
+    {
+      "datetime": "2026-05-05T13:29:50",
+      "amount": 1.008e-05,
+      "from": "bc1qevvemqgcdep3qyvg62zrarjwa238hum0m3r0l9",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "78e46e2011ef961bf0c2a320e184522adfc2d1b348488b1dc5f776f6ce2c5395"
+    },
+    {
+      "datetime": "2026-05-05T20:22:56",
+      "amount": 0.0008369,
+      "from": "bc1qcy6tv9lpz5yus7u27neue2aqnr36kqjmgd9a2a",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "063f6b56b6bbc67e14cb83fa4154827a970c48aaea95b5e59cc767352f6495f6"
+    },
+    {
+      "datetime": "2026-05-05T20:22:56",
+      "amount": 0.0008369,
+      "from": "bc1qyx6xdkdqstdpvckf2elltn8wsg98ttjl7swvnm",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "eddad5cd4efaee7ea4ef922bf5050ad9387524d1ac232bb56286055158400c09"
+    },
+    {
+      "datetime": "2026-05-05T20:22:56",
+      "amount": 0.0008369,
+      "from": "bc1qh6znzfrwflzr6d3l8sjzneaa0ejsgh7pualfne",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "cf314b74fa0d6bc784ee09d43f8f9f78daf01fb27e461503d6d2ddc4110aa286"
+    },
+    {
+      "datetime": "2026-05-08T00:29:46",
+      "amount": 1e-05,
+      "from": "194C34zTL2fJ9JpYGSnu7d4ZfzpT2uioAV",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "ad4d5bab2f189108670962f7a3c845a7bcbb89707b5e729b7f89bd83a8a3bbda"
+    },
+    {
+      "datetime": "2026-05-08T00:29:46",
+      "amount": 1.466e-05,
+      "from": "bc1q9fharzvhagzdf3deads5cxp8p0vx22fjxpfr9t",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "24c84d7e4cf82c8edaefaa9b7d132228bcb4b23273e60208dcadbcb113aded25"
+    },
+    {
+      "datetime": "2026-05-11T02:09:11",
+      "amount": 4.311e-05,
+      "from": "bc1qq2mvrp4g3ugd424dw4xv53rgsf8szkrv853jrc",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "24154795e1bf81aa91fd1b6359aea2ca4ad614863eefab42eb79b6938f7c440a"
+    },
+    {
+      "datetime": "2026-05-11T13:01:52",
+      "amount": 6.785e-05,
+      "from": "bc1qf43tdrym26qlz8rg06f88wg35n27uhcf29zs4f",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "726b58804f358c2ed95c9a301edafac82f95a651289ff881e5febcb2df26c34d"
+    },
+    {
+      "datetime": "2026-05-12T02:49:28",
+      "amount": 0.00051774,
+      "from": "bc1qkydqmqrl7lkaz6y3zwt4mjaq0x95fg5xzukcew",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "07071438f0e01254f1aba680fda6f5e8c4f348718ec9b3651ad3c812059b3ce5"
+    },
+    {
+      "datetime": "2026-05-13T01:15:01",
+      "amount": 0.00016256,
+      "from": "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "fa455dcf4ebe0584193b7b7c5407de1ac42aae7c84cc0cf3ff34d65bdcebee9c"
+    },
+    {
+      "datetime": "2026-05-13T04:34:47",
+      "amount": 0.00293,
+      "from": "3BHWexA45FRTpifqe57tjfNj744GV9R3qd",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "a44fe4fd4be098a7f892c5be0da263b8a6031744c425e3608165169ce32c68f6"
+    },
+    {
+      "datetime": "2026-05-13T04:34:47",
+      "amount": 0.00293,
+      "from": "35BUbfGWPtRz5uVARK1p5e1mXnXrzcKiHU",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "4bf26f64c4b1b78dd878be68ce46471398b7f08eda19002f6fb7956221776670"
+    },
+    {
+      "datetime": "2026-05-13T04:34:47",
+      "amount": 0.00293,
+      "from": "3Q2e6RDgYzFqWb9yWdnV8NnYQvn3mvcSiM",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "3755e6ae9f5f6ae40000e8d32ee50e94951bf8e20159c10931b5107211f7f09b"
+    },
+    {
+      "datetime": "2026-05-13T04:34:47",
+      "amount": 0.00293,
+      "from": "39e7PANJeUDieDLcGmtSfR3Uyryj9t4RYT",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "9d1dc9f36b8dbdcb00ba3e3ec067196b7babdd18f474583b5c9098d57c960dd7"
+    },
+    {
+      "datetime": "2026-05-13T04:34:47",
+      "amount": 0.00293,
+      "from": "3DfPY871F2vkFUmHrq9LYEdSFcU9NCuqzg",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "1c041f80d663a8adc9341a42dc640da4eeccf5ca3e159f2ba79ff1e3a6d1dfe6"
+    },
+    {
+      "datetime": "2026-05-13T07:22:18",
+      "amount": 1e-05,
+      "from": "bc1qcl7jrsgujxl5nt6qgm8c6pxdpk8c07jsg6cq4s",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "febf66d1870d2d4d610497bbd67e55dae623bdb0dcd98fe211d7b346693cdcac"
+    },
+    {
+      "datetime": "2026-05-15T01:31:50",
+      "amount": 1e-05,
+      "from": "194C34zTL2fJ9JpYGSnu7d4ZfzpT2uioAV",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "d97097189c12289dbb25d94a86344137198b07b186024419047626509b484867"
+    },
+    {
+      "datetime": "2026-05-15T14:33:22",
+      "amount": 0.00035942,
+      "from": "bc1qlpuyw0n4f67mmj0shxcapfn28w28q6ud87wwx5",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "eafa5fcda2df03a6d0aae848eb336d823c288f54b4fa172b4529f52c60e2ffc6"
+    },
+    {
+      "datetime": "2026-05-16T13:53:34",
+      "amount": 1.206e-05,
+      "from": "bc1qr35hws365juz5rtlsjtvmulu97957kqvr3zpw3",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "91421a2e62e0a2c6010111ede3d13ea838cd9439261786c475a1ee33be5ee112"
+    },
+    {
+      "datetime": "2026-05-17T10:11:10",
+      "amount": 9.474e-05,
+      "from": "bc1q6hvsj3dnafv7g3kpqcg85xjrpf8h6lr24vwasc",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "1476227e6518ce129a9fdba4269e99ed2ef9c6b90f9612bb689ae38acf70a1ee"
+    },
+    {
+      "datetime": "2026-05-18T18:30:04",
+      "amount": 1.51e-05,
+      "from": "bc1pse2acfxsngw3vkk82yvfwugujx9gussuyv2ku76kqh2ww3plhkrsnu8m3v",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "790ffd13268f072e159be2085e89bc32b703c4f6befebf46815d7089ca46e67c"
+    },
+    {
+      "datetime": "2026-05-18T21:28:25",
+      "amount": 3.695e-05,
+      "from": "bc1qr35hws365juz5rtlsjtvmulu97957kqvr3zpw3",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "0808212a9b5f0350deb01ebcd85554ace672ce2293e88e908e8b399406967e4d"
+    },
+    {
+      "datetime": "2026-05-19T02:16:16",
+      "amount": 0.0001,
+      "from": "bc1q6hphy59uddyvptshyx8ffejuuuunr52mmqjvqu",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "dfb5f2f1ad0d31efad4cda0ff3355b4c2391eb625018a3a223b64bdbb572637d"
+    },
+    {
+      "datetime": "2026-05-20T21:14:37",
+      "amount": 1.252e-05,
+      "from": "bc1qhsuyxkq8n87uqv7autt9f6vwsezstan53xpp0z",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "9d49523058509049b935b60ef7432f89e8d52d915e41324ad5b1c116801c45a9"
+    },
+    {
+      "datetime": "2026-05-21T13:38:00",
+      "amount": 1e-05,
+      "from": "bc1qkgfkn8zzdj3xr66lw7xcne5ykskzut3t2d36qt",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "ddbb9d53b4c04cecd24b16163f833afd1920b4a22f1a9f48feb8c53ed47a1599"
+    },
+    {
+      "datetime": "2026-05-21T13:38:00",
+      "amount": 1e-05,
+      "from": "bc1pmfyr5e7skfg5s5p4da89zyuqawhx5eascuhhfdrjjpwvctj56k0s53vfm5",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "129d4b127d45e6eb2096163965d5d48c1f7dffcb47d155392109c505d566de3a"
+    },
+    {
+      "datetime": "2026-05-22T00:06:28",
+      "amount": 1e-05,
+      "from": "194C34zTL2fJ9JpYGSnu7d4ZfzpT2uioAV",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "6c2a24dd0a2157728950a9f7158355c651422c0a035af6f220f0eddf12e420b9"
+    },
+    {
+      "datetime": "2026-05-22T13:10:20",
+      "amount": 8.539e-05,
+      "from": "bc1qjdgp84gcjs0qul8k2z5zec4kea2wpydz4ajfsy",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "9471b80fc45f503a9da19e8b3c8584dd69fb00ad40a3dd3774a036ae9d06c04d"
+    },
+    {
+      "datetime": "2026-05-22T13:10:20",
+      "amount": 8.539e-05,
+      "from": "bc1qc8a267p0a48vfar87pwpeqeaag40ukj08agg6g",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "daadb7c6e1e8df9d9cd88a127d7ff050a8b88fb9e936e299e6b245b05e313405"
+    },
+    {
+      "datetime": "2026-05-22T15:31:52",
+      "amount": 0.00061579,
+      "from": "3C8nEuHqxb9o8Asq8f7E5Aa83yTh2Pzfby",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "c8dad4c90a5c6978a890f42965240e1abb7070525b5a94bedb3c2997aa22ae67"
+    },
+    {
+      "datetime": "2026-05-22T15:31:52",
+      "amount": 0.00061579,
+      "from": "3P1PRbgYeLFindhaqaWi9yuvs6FKfNgLV7",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "3366a9d56d16369003b7611e211b3383507a621ccf8fec1009ce993082b7cd62"
+    },
+    {
+      "datetime": "2026-05-25T02:14:41",
+      "amount": 1.5e-05,
+      "from": "bc1pt58gdfhrmjpzdw43kuh209gnl0w4fqmykuyp9tusyc0h37rrrauqqnv4jz",
+      "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      "txid": "580b0d20c8275625c52aefdb4f13250abbe55f5c33ce66c5b25007114d5a92c5"
+    }
+  ],
+  "heatmap": {
+    "0": {
+      "total_amount": 4.969e-05,
+      "tx_count": 4
+    },
+    "1": {
+      "total_amount": 0.00017256,
+      "tx_count": 2
+    },
+    "2": {
+      "total_amount": 0.00067585,
+      "tx_count": 4
+    },
+    "3": {
+      "total_amount": 1.464e-05,
+      "tx_count": 1
+    },
+    "4": {
+      "total_amount": 0.01465,
+      "tx_count": 5
+    },
+    "6": {
+      "total_amount": 0.00096234,
+      "tx_count": 1
+    },
+    "7": {
+      "total_amount": 0.00021518,
+      "tx_count": 2
+    },
+    "10": {
+      "total_amount": 9.474e-05,
+      "tx_count": 1
+    },
+    "12": {
+      "total_amount": 4.884e-05,
+      "tx_count": 3
+    },
+    "13": {
+      "total_amount": 0.00028077,
+      "tx_count": 7
+    },
+    "14": {
+      "total_amount": 0.00037196,
+      "tx_count": 2
+    },
+    "15": {
+      "total_amount": 0.00123158,
+      "tx_count": 2
+    },
+    "18": {
+      "total_amount": 1.51e-05,
+      "tx_count": 1
+    },
+    "20": {
+      "total_amount": 0.0025107000000000003,
+      "tx_count": 3
+    },
+    "21": {
+      "total_amount": 0.00012447,
+      "tx_count": 3
+    }
+  },
+  "ollama_narrative": "No se pudo generar el analisis IA. Verifique que Ollama este ejecutandose.",
+  "filters": {
+    "min_amount": 1e-05,
+    "hide_change": false
+  }
+}
