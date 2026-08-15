@@ -109,22 +109,80 @@ class KoiosAdapter(BlockchainAPI):
 
     def get_address_transactions(self, address: str, limit: int = 200,
                                  chain: str = "ada") -> List[Dict[str, Any]]:
-        """Get transactions for a Cardano address from Koios."""
+        """Get transactions for a Cardano address from Koios with full details."""
         try:
             self.logger.debug(f"Getting transactions for {address} from Koios (limit: {limit})")
             txs = self.client.get_address_transactions(address, limit=limit)
 
             normalized = []
             for tx in txs:
-                # Koios address_txs returns simplified tx info
-                # We need to enrich with full tx data for inputs/outputs
+                tx_hash = tx.get("tx_hash")
+                if not tx_hash:
+                    continue
+
+                # Fetch full transaction details for inputs/outputs
+                full_tx = self.client.get_transaction(tx_hash)
+                if not full_tx:
+                    self.logger.warning(f"Could not fetch full tx details for {tx_hash}")
+                    continue
+
+                # Get inputs and outputs
+                inputs = full_tx.get("inputs", [])
+                outputs = full_tx.get("outputs", [])
+
+                # Determine direction and amount for this address
+                sent_amount = 0
+                received_amount = 0
+
+                # Check inputs (sent from this address)
+                for inp in inputs:
+                    inp_addr = inp.get("address")
+                    if inp_addr == address:
+                        sent_amount += _sum_ada_from_value(inp.get("value", []))
+
+                # Check outputs (received by this address)
+                for out in outputs:
+                    out_addr = out.get("address")
+                    if out_addr == address:
+                        received_amount += _sum_ada_from_value(out.get("value", []))
+
+                # Normalize inputs
+                norm_inputs = []
+                for inp in inputs:
+                    inp_value = inp.get("value", [])
+                    norm_inputs.append({
+                        "tx_hash": inp.get("tx_hash"),
+                        "output_index": inp.get("index"),
+                        "address": inp.get("address"),
+                        "amount": _from_lovelaces(_sum_ada_from_value(inp_value)),
+                        "amount_lovelaces": _sum_ada_from_value(inp_value),
+                        "assets": _extract_assets_from_value(inp_value),
+                    })
+
+                # Normalize outputs
+                norm_outputs = []
+                for out in outputs:
+                    out_value = out.get("value", [])
+                    norm_outputs.append({
+                        "address": out.get("address"),
+                        "amount": _from_lovelaces(_sum_ada_from_value(out_value)),
+                        "amount_lovelaces": _sum_ada_from_value(out_value),
+                        "assets": _extract_assets_from_value(out_value),
+                        "datum_hash": out.get("datum_hash"),
+                        "inline_datum": out.get("inline_datum"),
+                        "reference_script": out.get("reference_script"),
+                    })
+
                 normalized.append({
-                    "txid": tx.get("tx_hash"),
+                    "txid": tx_hash,
                     "block_height": tx.get("block_height"),
                     "block_time": tx.get("block_time"),
                     "epoch_no": tx.get("epoch_no"),
-                    "amount": 0,  # Will be computed per address direction
-                    "direction": "unknown",  # Will be determined by caller
+                    "fees": _from_lovelaces(int(tx.get("fees", 0))),
+                    "inputs": norm_inputs,
+                    "outputs": norm_outputs,
+                    "sent_amount": _from_lovelaces(sent_amount),
+                    "received_amount": _from_lovelaces(received_amount),
                     "chain": "ada",
                 })
 
