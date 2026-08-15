@@ -28,6 +28,7 @@ from infrastructure.adapters.wallet_explorer_adapter import WalletExplorerAdapte
 from infrastructure.adapters.etherscan_adapter import EtherscanAdapter
 from infrastructure.adapters.blockbook_adapter import BlockbookAdapter
 from infrastructure.adapters.trongrid_adapter import TronGridAdapter
+from infrastructure.adapters.koios_adapter import KoiosAdapter
 from infrastructure.persistence.neo4j_adapter import Neo4jAdapter
 from infrastructure.reporting.forensic_report_adapter import ForensicReportAdapter
 
@@ -98,8 +99,8 @@ class BTCForensicsPro:
         self.max_hops = max_hops
         self.min_amount = min_amount  # FILTRO ANTI-DUST
         self.chain = chain
-        self.chain_name = {"btc": "Bitcoin", "eth": "Ethereum", "bch": "Bitcoin Cash", "trx": "TRON"}.get(chain, "Bitcoin")
-        self.unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
+        self.chain_name = {"btc": "Bitcoin", "eth": "Ethereum", "bch": "Bitcoin Cash", "trx": "TRON", "ada": "Cardano"}.get(chain, "Bitcoin")
+        self.unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
         self.rate_limit_delay = 0.6  # seconds between hop traces
         self.case_id = case_id
         self._last_trace_error = ""
@@ -131,6 +132,9 @@ class BTCForensicsPro:
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         elif chain == "trx":
             self.blockchain_api = blockchain_api or TronGridAdapter()
+            self.wallet_api = wallet_api or WalletExplorerAdapter()
+        elif chain == "ada":
+            self.blockchain_api = blockchain_api or KoiosAdapter()
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         else:
             self.blockchain_api = blockchain_api or BlockstreamAdapter()
@@ -1420,25 +1424,51 @@ Informe forense:"""
     # ENHANCED REPORT METHODS (V2)
     # ---------------------------------------------------------
 
-    def collect_edge_data(self, address: str, depth: int = 2, limit: int = 5000) -> List[Dict[str, Any]]:
+    def collect_edge_data(self, address: str, depth: int = 2, limit: int = 5000,
+                          start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
         """
         Collect edge data from Neo4j (same as dashboardpro.fetch_subgraph).
         Returns list of transaction edge dicts for report generation.
+
+        Args:
+            address: Root address
+            depth: Traversal depth
+            limit: Maximum edges to return
+            start_date: Start date filter (ISO format YYYY-MM-DD)
+            end_date: End date filter (ISO format YYYY-MM-DD)
+
+        Returns:
+            List of edge dicts with from_addr, to_addr, amount, txid, etc.
         """
         try:
-            return self.neo4j_repo.get_subgraph_edges(address, depth=depth, limit=limit, chain=self.chain)
+            return self.neo4j_repo.get_subgraph_edges(
+                address, depth=depth, limit=limit, chain=self.chain,
+                start_date=start_date, end_date=end_date
+            )
         except AttributeError:
             # Fallback: inline the query if the repo doesn't have the method
             pass
 
-        # Inline fallback for get_subgraph_edges
+        # Inline fallback for get_subgraph_edges with date filtering
         depth_literal = f"*1..{depth}"
+        
+        # Build date filter clause
+        date_filter = ""
+        params = {"addr": address, "limit": limit}
+        if start_date:
+            date_filter += " AND rel.block_time >= $start_ts"
+            params["start_ts"] = int(datetime.fromisoformat(start_date).timestamp())
+        if end_date:
+            date_filter += " AND rel.block_time <= $end_ts"
+            params["end_ts"] = int(datetime.fromisoformat(end_date + " 23:59:59").timestamp())
+
         query = f"""
         MATCH (root:Address {{address:$addr}})
         MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
         UNWIND relationships(p) AS rel
         WITH DISTINCT rel
         MATCH (a:Address)-[rel]->(b:Address)
+        WHERE 1=1 {date_filter}
         RETURN 
             a.address AS from_addr,
             b.address AS to_addr,
@@ -1455,7 +1485,7 @@ Informe forense:"""
         """
         rows = []
         try:
-            for rec in self.neo4j_repo.run_query(query, addr=address, limit=limit):
+            for rec in self.neo4j_repo.run_query(query, **params):
                 row = dict(rec)
                 if not isinstance(row.get('from_labels'), list):
                     row['from_labels'] = []
@@ -1597,7 +1627,7 @@ Informe forense:"""
         self.log("info", f"Generating enhanced report for {address}")
 
         # 1. Collect edge data from Neo4j
-        edges = self.collect_edge_data(address, depth=depth)
+        edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
         if not edges:
             self.log("warning", f"No edge data found for {address}")
             return {"error": "No hay datos de transacciones en Neo4j para esta direccion."}
@@ -1741,7 +1771,7 @@ Informe forense:"""
         self.log("info", f"Generating forensic pericial report for {address}")
 
         # 1. Collect edge data from Neo4j
-        edges = self.collect_edge_data(address, depth=depth)
+        edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
         if not edges:
             self.log("warning", f"No edge data found for {address}")
             return {"error": "No hay datos de transacciones en Neo4j para esta direccion."}

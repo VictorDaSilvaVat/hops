@@ -2,6 +2,7 @@
 Adapter for Neo4j persistence implementing the Neo4jRepository port.
 """
 from typing import Optional, List, Dict, Any
+from datetime import datetime
 import logging
 from neo4j import GraphDatabase
 
@@ -377,7 +378,7 @@ class Neo4jAdapter(Neo4jRepository):
             return []
 
     def get_subgraph_edges(self, address: str, depth: int = 2, limit: int = 5000,
-                           chain: str = "btc") -> List[Dict[str, Any]]:
+                           chain: str = "btc", start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
         """
         Get all edges (transactions) in the subgraph around an address.
 
@@ -386,11 +387,24 @@ class Neo4jAdapter(Neo4jRepository):
             depth: Traversal depth
             limit: Maximum edges to return
             chain: Chain identifier
+            start_date: Start date filter (ISO format YYYY-MM-DD)
+            end_date: End date filter (ISO format YYYY-MM-DD)
 
         Returns:
             List of edge dicts with from_addr, to_addr, amount, txid, etc.
         """
         depth_literal = f"*1..{depth}"
+        
+        # Build date filter clause
+        date_filter = ""
+        params = {"addr": address, "limit": limit, "chain": chain}
+        if start_date:
+            date_filter += " AND rel.block_time >= $start_ts"
+            params["start_ts"] = int(datetime.fromisoformat(start_date).timestamp())
+        if end_date:
+            date_filter += " AND rel.block_time <= $end_ts"
+            params["end_ts"] = int(datetime.fromisoformat(end_date + " 23:59:59").timestamp())
+
         query = f"""
         MATCH (root:Address {{address:$addr}})
         MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
@@ -398,6 +412,7 @@ class Neo4jAdapter(Neo4jRepository):
         UNWIND relationships(p) AS rel
         WITH DISTINCT rel
         MATCH (a:Address)-[rel]->(b:Address)
+        WHERE 1=1 {date_filter}
         RETURN 
             a.address AS from_addr,
             b.address AS to_addr,

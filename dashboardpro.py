@@ -88,6 +88,32 @@ def is_valid_bch_address(addr: str) -> bool:
         return is_valid_btc_address(addr)
     return False
 
+def is_valid_ada_address(addr: str) -> bool:
+    """Validate Cardano address (Bech32 format). Supports mainnet and testnet."""
+    if not addr:
+        return False
+    # Cardano Bech32 prefixes with HRP separator '1'
+    # Format: HRP + '1' + data + checksum
+    # Mainnet: addr1... / stake1...
+    # Testnet: addr_test1... / stake_test1...
+    if addr.startswith(("addr1", "stake1")):
+        # Mainnet: check data part after HRP separator '1'
+        # Find the separator '1' after the HRP
+        hrp_end = addr.find('1', 4)  # after 'addr' or 'stake'
+        if hrp_end == -1:
+            return False
+        data_part = addr[hrp_end + 1:]  # after the separator '1'
+        return 45 <= len(data_part) <= 115 and all(c in BECH32_CHARSET for c in data_part.lower())
+    if addr.startswith(("addr_test1", "stake_test1")):
+        # Testnet: check data part after HRP separator '1'
+        hrp_end = addr.find('1', 8)  # after 'addr_test' or 'stake_test'
+        if hrp_end == -1:
+            return False
+        data_part = addr[hrp_end + 1:]
+        return 45 <= len(data_part) <= 115 and all(c in BECH32_CHARSET for c in data_part.lower())
+    return False
+
+
 def validate_address(addr: str, chain: str) -> tuple[bool, str]:
     """Returns (is_valid, error_message)."""
     validators = {
@@ -95,6 +121,7 @@ def validate_address(addr: str, chain: str) -> tuple[bool, str]:
         "eth": (is_valid_eth_address, "Debe ser 0x seguido de 40 caracteres hex (a-f, 0-9)."),
         "bch": (is_valid_bch_address, "Debe ser cashaddr (q/p...) o legacy (1/3...)."),
         "trx": (is_valid_trx_address, "Debe comenzar con T y tener 34 caracteres base58."),
+        "ada": (is_valid_ada_address, "Debe ser addr1... (pago) o stake1... (stake) para mainnet, o addr_test1.../stake_test1... para testnet."),
     }
     validator, hint = validators.get(chain, (lambda a: bool(a), ""))
     if not validator(addr):
@@ -877,9 +904,9 @@ def main():
         </div>
         """.format(_get_logo_b64()), unsafe_allow_html=True)
 
-        chain = st.selectbox("Red", ["BTC", "ETH", "BCH", "TRX"], index=0, label_visibility="collapsed")
+        chain = st.selectbox("Red", ["BTC", "ETH", "BCH", "TRX", "ADA"], index=0, label_visibility="collapsed")
         chain = chain.lower()
-        unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
+        unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
         TRACER_PARAMS["chain"] = chain
 
         max_hops = st.slider("Profundidad (hops)", min_value=1, max_value=5, value=min(TRACER_PARAMS["max_hops"], 5), help="A mayor profundidad, más llamadas a APIs externas y mayor tiempo de procesamiento.")
@@ -916,8 +943,8 @@ def main():
                                                        key=f"lbl_{addr}", label_visibility="collapsed",
                                                        placeholder="label1, label2")
                         with cols[1]:
-                            new_entity = st.selectbox("Tipo", ["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"],
-                                                      index=["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"].index(cur_entity) if cur_entity in ["unknown", "exchange", "mixer", "sanctioned", "bridge", "other"] else 0,
+                            new_entity = st.selectbox("Tipo", ["unknown", "exchange", "mixer", "sanctioned", "bridge", "gambling", "ransomware", "darkweb", "darkmarket", "other"],
+                                                      index=["unknown", "exchange", "mixer", "sanctioned", "bridge", "gambling", "ransomware", "darkweb", "darkmarket", "other"].index(cur_entity) if cur_entity in ["unknown", "exchange", "mixer", "sanctioned", "bridge", "gambling", "ransomware", "darkweb", "darkmarket", "other"] else 0,
                                                       key=f"ent_{addr}", label_visibility="collapsed")
                         if st.button("Guardar", key=f"save_{addr}", use_container_width=True):
                             parsed = [x.strip() for x in new_labels.split(",") if x.strip()]
@@ -985,6 +1012,14 @@ def main():
     with col3:
         hide_change = st.checkbox("Ocultar change outputs")
         only_fanout = st.checkbox("Solo FAN-OUT")
+
+    # Date range filter
+    col_date1, col_date2 = st.columns(2)
+    with col_date1:
+        start_date = st.date_input("Fecha inicio", value=None, format="YYYY-MM-DD")
+    with col_date2:
+        end_date = st.date_input("Fecha fin", value=None, format="YYYY-MM-DD")
+
     entity = st.selectbox("Filtrar por entidad", ["Todas", "exchange", "mixer", "bridge", "sanctioned", "other"], label_visibility="collapsed")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -996,6 +1031,8 @@ def main():
         "only_fanout": only_fanout,
         "entity": entity,
         "_chain": chain,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
     }
 
     if st.button("Iniciar análisis", use_container_width=True):
