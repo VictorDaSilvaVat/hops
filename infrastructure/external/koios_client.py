@@ -23,18 +23,17 @@ class KoiosClient(BaseAPIClient):
         retry_delay: float = 1.0,
         rate_limit_delay: float = 0.3,
     ):
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
         super().__init__(
             base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
             retry_delay=retry_delay,
             rate_limit_delay=rate_limit_delay,
-            default_headers=headers,
         )
+        # Set default headers after parent init
+        self.session.headers.update({"Content-Type": "application/json"})
+        if api_key:
+            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
 
     # --- Address Endpoints ---
 
