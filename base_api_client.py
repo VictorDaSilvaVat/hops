@@ -231,6 +231,10 @@ class BaseAPIClient:
                 if response.status_code == 200:
                     try:
                         data = response.json()
+                        # Koios sometimes returns JSON strings instead of objects/arrays
+                        if isinstance(data, str):
+                            logger.error("Koios API returned string instead of object: %s", data)
+                            raise APIError(f"API error: {data}")
                         return data
                     except json.JSONDecodeError as e:
                         logger.error("Failed to decode JSON from %s: %s", url, e)
