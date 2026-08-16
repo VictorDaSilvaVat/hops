@@ -63,6 +63,9 @@ class APIConfig:
     etherscan_api_key: str = field(
         default_factory=lambda: os.getenv("ETHERSCAN_API_KEY", "")
     )
+    blockfrost_api_key: str = field(
+        default_factory=lambda: os.getenv("BLOCKFROST_API_KEY", "")
+    )
     
     # Caching
     cache_ttl_seconds: int = field(

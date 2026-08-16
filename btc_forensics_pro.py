@@ -29,6 +29,7 @@ from infrastructure.adapters.etherscan_adapter import EtherscanAdapter
 from infrastructure.adapters.blockbook_adapter import BlockbookAdapter
 from infrastructure.adapters.trongrid_adapter import TronGridAdapter
 from infrastructure.adapters.koios_adapter import KoiosAdapter
+from infrastructure.adapters.blockfrost_adapter import BlockfrostAdapter
 from infrastructure.persistence.neo4j_adapter import Neo4jAdapter
 from infrastructure.reporting.forensic_report_adapter import ForensicReportAdapter
 
@@ -134,7 +135,7 @@ class BTCForensicsPro:
             self.blockchain_api = blockchain_api or TronGridAdapter()
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         elif chain == "ada":
-            self.blockchain_api = blockchain_api or KoiosAdapter()
+            self.blockchain_api = blockchain_api or BlockfrostAdapter(config=self.config)
             self.wallet_api = wallet_api or WalletExplorerAdapter()
         else:
             self.blockchain_api = blockchain_api or BlockstreamAdapter()
