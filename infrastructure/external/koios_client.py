@@ -59,6 +59,12 @@ class KoiosClient(BaseAPIClient):
             if after_height:
                 payload["_after_block_height"] = after_height
             result = self._post("/address_txs", json=payload)
+            
+            # Handle string responses (API errors)
+            if isinstance(result, str):
+                logger.error(f"Koios API returned string for address_txs: {result}")
+                return []
+            
             if result and isinstance(result, list):
                 # Sort by block_time descending (newest first)
                 result.sort(key=lambda x: x.get("block_time", 0), reverse=True)
@@ -125,6 +131,11 @@ class KoiosClient(BaseAPIClient):
         try:
             payload = {"_tx_hashes": [tx_hash]}
             result = self._post("/tx_info", json=payload)
+            
+            if isinstance(result, str):
+                logger.error(f"Koios API returned string for tx_info: {result}")
+                return None
+                
             if result and isinstance(result, list) and len(result) > 0:
                 return result[0]
             return None
