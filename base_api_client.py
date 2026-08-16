@@ -186,6 +186,125 @@ class BaseAPIClient:
         if last_exception:
             raise last_exception
         raise NetworkError(f"Request to {url} failed after {self.max_retries + 1} attempts")
+
+    def _post(
+        self,
+        endpoint: str,
+        use_cache: bool = False,
+        cache_ttl: int = 300,
+        **kwargs
+    ) -> Optional[Dict[Any, Any]]:
+        """
+        Make a POST request with retry logic.
+
+        Args:
+            endpoint: API endpoint (will be appended to base_url)
+            use_cache: Whether to use caching (typically False for POST)
+            cache_ttl: Cache time-to-live in seconds
+            **kwargs: Additional arguments to pass to requests.post (e.g., json, data)
+
+        Returns:
+            JSON response as dictionary or None if failed
+        """
+        url = f"{self.base_url}{endpoint}"
+
+        # Apply inter-request throttle to avoid rate limiting
+        self._throttle()
+
+        # Make request with retry logic
+        start_time = time.time()
+        last_exception = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                logger.debug("Making POST request to %s (attempt %d/%d)", url, attempt + 1, self.max_retries + 1)
+                response = self.session.post(url, timeout=self.timeout, **kwargs)
+                self._last_request_time = time.time()
+
+                # Log request details
+                logger.info(
+                    "API POST request completed: url=%s status=%d duration=%.2fs",
+                    url, response.status_code, time.time() - start_time
+                )
+
+                # Handle HTTP status codes (same logic as _get)
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        return data
+                    except json.JSONDecodeError as e:
+                        logger.error("Failed to decode JSON from %s: %s", url, e)
+                        raise APIError(f"Invalid JSON response: {e}")
+
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', max(2, self.rate_limit_delay * (2 ** attempt))))
+                    logger.warning("Rate limit exceeded for %s. Waiting %ds before retry (attempt %d/%d)",
+                                   url, retry_after, attempt + 1, self.max_retries + 1)
+                    if attempt < self.max_retries:
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        raise RateLimitError(
+                            f"Rate limit exceeded after {self.max_retries + 1} attempts. Last retry-after: {retry_after}s",
+                            status_code=429,
+                            retry_after=retry_after
+                        )
+
+                elif response.status_code == 401:
+                    logger.error("Authentication failed for %s", url)
+                    raise AuthenticationError(
+                        f"Authentication failed: {response.text}",
+                        status_code=401
+                    )
+
+                elif response.status_code >= 500:
+                    logger.error("Server error %d for %s", response.status_code, url)
+                    if attempt < self.max_retries:
+                        wait = self.backoff_factor * (2 ** attempt)
+                        logger.info("Retrying in %.1fs...", wait)
+                        time.sleep(wait)
+                        continue
+                    raise APIError(
+                        f"Server error: {response.status_code} {response.text}",
+                        status_code=response.status_code
+                    )
+
+                else:
+                    logger.error("Client error %d for %s: %s", response.status_code, url, response.text[:200])
+                    raise APIError(
+                        f"Client error: {response.status_code} {response.text[:200]}",
+                        status_code=response.status_code
+                    )
+
+            except (RateLimitError, AuthenticationError, APIError):
+                raise
+
+            except requests.Timeout:
+                logger.error("Timeout requesting %s (attempt %d/%d)", url, attempt + 1, self.max_retries + 1)
+                last_exception = NetworkError(f"Request timeout after {self.timeout} seconds")
+                if attempt < self.max_retries:
+                    wait = self.backoff_factor * (2 ** attempt)
+                    logger.info("Retrying in %.1fs...", wait)
+                    time.sleep(wait)
+                    continue
+
+            except requests.ConnectionError as e:
+                logger.error("Connection error for %s (attempt %d/%d): %s", url, attempt + 1, self.max_retries + 1, e)
+                last_exception = NetworkError(f"Connection error: {e}")
+                if attempt < self.max_retries:
+                    wait = self.backoff_factor * (2 ** attempt)
+                    logger.info("Retrying in %.1fs...", wait)
+                    time.sleep(wait)
+                    continue
+
+            except requests.RequestException as e:
+                logger.error("Request exception for %s: %s", url, e)
+                raise NetworkError(f"Request failed: {e}")
+
+        # All retries exhausted
+        if last_exception:
+            raise last_exception
+        raise NetworkError(f"Request to {url} failed after {self.max_retries + 1} attempts")
     def _throttle(self):
         """Enforce minimum delay between requests to avoid rate limiting."""
         if self._last_request_time > 0:
