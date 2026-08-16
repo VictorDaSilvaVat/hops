@@ -25,7 +25,6 @@ class KoiosAdapter(BlockchainAPI):
             if not info:
                 return None
 
-            # Koios returns list of addresses; we queried one
             balance_lovelaces = _sum_ada_from_value(info.get("balance", []))
             stake_address = info.get("stake_address")
 
@@ -50,7 +49,6 @@ class KoiosAdapter(BlockchainAPI):
             if not tx:
                 return None
 
-            # Normalize transaction format
             return {
                 "txid": tx.get("tx_hash"),
                 "block_height": tx.get("block_height"),
@@ -73,7 +71,6 @@ class KoiosAdapter(BlockchainAPI):
             if not tx:
                 return []
             inputs = tx.get("inputs", [])
-            # Normalize input format
             return [{
                 "tx_hash": inp.get("tx_hash"),
                 "output_index": inp.get("index"),
@@ -93,7 +90,6 @@ class KoiosAdapter(BlockchainAPI):
             if not tx:
                 return []
             outputs = tx.get("outputs", [])
-            # Normalize output format
             return [{
                 "address": out.get("address"),
                 "amount": _from_lovelaces(_sum_ada_from_value(out.get("value", []))),
@@ -114,41 +110,48 @@ class KoiosAdapter(BlockchainAPI):
             self.logger.debug(f"Getting transactions for {address} from Koios (limit: {limit})")
             txs = self.client.get_address_transactions(address, limit=limit)
 
+            if not isinstance(txs, list):
+                self.logger.error(f"Expected list from get_address_transactions, got {type(txs)}: {txs}")
+                return []
+
             normalized = []
             for tx in txs:
+                if not isinstance(tx, dict):
+                    self.logger.warning(f"Skipping non-dict transaction: {tx}")
+                    continue
                 tx_hash = tx.get("tx_hash")
                 if not tx_hash:
                     continue
 
-                # Fetch full transaction details for inputs/outputs
                 full_tx = self.client.get_transaction(tx_hash)
-                if not full_tx:
+                if not full_tx or not isinstance(full_tx, dict):
                     self.logger.warning(f"Could not fetch full tx details for {tx_hash}")
                     continue
 
-                # Get inputs and outputs
                 inputs = full_tx.get("inputs", [])
                 outputs = full_tx.get("outputs", [])
 
-                # Determine direction and amount for this address
                 sent_amount = 0
                 received_amount = 0
 
-                # Check inputs (sent from this address)
                 for inp in inputs:
+                    if not isinstance(inp, dict):
+                        continue
                     inp_addr = inp.get("address")
                     if inp_addr == address:
                         sent_amount += _sum_ada_from_value(inp.get("value", []))
 
-                # Check outputs (received by this address)
                 for out in outputs:
+                    if not isinstance(out, dict):
+                        continue
                     out_addr = out.get("address")
                     if out_addr == address:
                         received_amount += _sum_ada_from_value(out.get("value", []))
 
-                # Normalize inputs
                 norm_inputs = []
                 for inp in inputs:
+                    if not isinstance(inp, dict):
+                        continue
                     inp_value = inp.get("value", [])
                     norm_inputs.append({
                         "tx_hash": inp.get("tx_hash"),
@@ -159,9 +162,10 @@ class KoiosAdapter(BlockchainAPI):
                         "assets": _extract_assets_from_value(inp_value),
                     })
 
-                # Normalize outputs
                 norm_outputs = []
                 for out in outputs:
+                    if not isinstance(out, dict):
+                        continue
                     out_value = out.get("value", [])
                     norm_outputs.append({
                         "address": out.get("address"),
@@ -191,8 +195,6 @@ class KoiosAdapter(BlockchainAPI):
         except Exception as e:
             self.logger.error(f"Error getting address transactions for {address}: {e}")
             return []
-
-    # --- Additional Cardano-specific methods ---
 
     def get_address_utxos(self, address: str) -> List[Dict[str, Any]]:
         """Get UTxOs for an address."""
