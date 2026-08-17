@@ -1157,7 +1157,11 @@ def main():
                         msg += "\n\nVerifica que la dirección sea válida."
                     st.error(msg)
                     return
-                st.session_state.analysis_done = True
+            # Reached when tracing just completed successfully, OR when the
+            # address already had relations in Neo4j from a previous run
+            # (in which case tracing is skipped entirely and we go straight
+            # to showing the existing data).
+            st.session_state.analysis_done = True
         finally:
             tracer.close()
 
