@@ -1,10 +1,15 @@
 """
 Configuration management for the HOPS forensic system.
 """
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional, List
 from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_NEO4J_PASSWORD = "neo4jneo4j"
 
 
 class LogLevel(Enum):
@@ -20,8 +25,16 @@ class Neo4jConfig:
     """Neo4j database configuration."""
     uri: str = field(default_factory=lambda: os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     user: str = field(default_factory=lambda: os.getenv("NEO4J_USER", "neo4j"))
-    password: str = field(default_factory=lambda: os.getenv("NEO4J_PASSWORD", "neo4jneo4j"))
-    
+    password: str = field(default_factory=lambda: os.getenv("NEO4J_PASSWORD", DEFAULT_NEO4J_PASSWORD))
+
+    def __post_init__(self):
+        if self.password == DEFAULT_NEO4J_PASSWORD and "NEO4J_PASSWORD" not in os.environ:
+            logger.warning(
+                "NEO4J_PASSWORD is not set — falling back to the well-known default "
+                "credential. Set NEO4J_PASSWORD in the environment for any deployment "
+                "reachable outside your local machine."
+            )
+
     def validate(self) -> List[str]:
         """Validate Neo4j configuration."""
         errors = []

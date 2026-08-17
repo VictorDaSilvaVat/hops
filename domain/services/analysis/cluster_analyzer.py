@@ -50,7 +50,7 @@ class ClusterAnalyzerService:
         clusters = self._identify_clusters(transactions)
 
         # Enrich clusters with entity information
-        self._enrich_clusters_with_entities(clusters)
+        self._enrich_clusters_with_entities(clusters, transactions)
 
         # Calculate risk scores
         for cluster in clusters:
@@ -115,27 +115,33 @@ class ClusterAnalyzerService:
         
         return clusters
 
-    def _enrich_clusters_with_entities(self, clusters: List[TransactionCluster]):
-        """Enrich clusters with entity information from addresses."""
+    def _enrich_clusters_with_entities(self, clusters: List[TransactionCluster],
+                                       transactions: List[Dict[str, Any]]):
+        """Enrich clusters with entity information already attached to transactions
+        (populated upstream from Neo4j / WalletExplorer lookups)."""
+        address_entity_map: Dict[str, str] = {}
+        for tx in transactions:
+            from_addr = tx.get('from_address')
+            from_entity = tx.get('from_entity_type')
+            if from_addr and from_entity and from_entity != "unknown":
+                address_entity_map[from_addr] = from_entity
+
+            to_addr = tx.get('to_address')
+            to_entity = tx.get('to_entity_type')
+            if to_addr and to_entity and to_entity != "unknown":
+                address_entity_map[to_addr] = to_entity
+
         for cluster in clusters:
-            # For each address in the cluster, try to get entity information
-            # Note: In a real implementation, we would batch these requests
-            # For now, we'll use a simplified approach
-            
             entity_types_found = set()
-            for address in list(cluster.addresses)[:10]:  # Limit to avoid too many API calls
-                try:
-                    # This would normally call external services
-                    # For now, we'll skip actual API calls to avoid external dependencies
-                    # In practice, this would use the address analyzer service
-                    pass
-                except Exception as e:
-                    self.logger.debug(f"Could not get entity info for {address}: {e}")
-                    continue
-            
-            # If we couldn't get real entity data, we'll mark as unknown
-            # In production, this would be populated with real data
-            if not entity_types_found:
+            for address in cluster.addresses:
+                entity_type = address_entity_map.get(address)
+                if entity_type:
+                    entity_types_found.add(entity_type)
+
+            if entity_types_found:
+                for entity_type in entity_types_found:
+                    cluster.add_entity_type(entity_type)
+            else:
                 cluster.add_entity_type("unknown")
 
     def detect_mixing_patterns(self, transactions: List[Dict[str, Any]]) -> Dict[str, Any]:

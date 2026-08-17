@@ -326,7 +326,9 @@ class Neo4jAdapter(Neo4jRepository):
                        r.is_change as is_change,
                        r.chain as chain,
                        endNode(r).address AS to_address,
-                       startNode(r).address AS from_address
+                       startNode(r).address AS from_address,
+                       endNode(r).entity_type AS to_entity_type,
+                       startNode(r).entity_type AS from_entity_type
                 ORDER BY r.block_time DESC
                 LIMIT $limit
                 """
@@ -347,7 +349,9 @@ class Neo4jAdapter(Neo4jRepository):
                         "is_change": record["is_change"],
                         "chain": record.get("chain") or "btc",
                         "to_address": record["to_address"],
-                        "from_address": record["from_address"]
+                        "from_address": record["from_address"],
+                        "to_entity_type": record.get("to_entity_type") or "unknown",
+                        "from_entity_type": record.get("from_entity_type") or "unknown"
                     }
                     transactions.append(tx)
                 

@@ -28,13 +28,13 @@ from infrastructure.adapters.wallet_explorer_adapter import WalletExplorerAdapte
 from infrastructure.adapters.etherscan_adapter import EtherscanAdapter
 from infrastructure.adapters.blockbook_adapter import BlockbookAdapter
 from infrastructure.adapters.trongrid_adapter import TronGridAdapter
-from infrastructure.adapters.koios_adapter import KoiosAdapter
 from infrastructure.adapters.blockfrost_adapter import BlockfrostAdapter
 from infrastructure.persistence.neo4j_adapter import Neo4jAdapter
 from infrastructure.reporting.forensic_report_adapter import ForensicReportAdapter
 
 # Configuration
 from config import Config
+from security import safe_path_component
 
 # Exceptions
 from exceptions import APIError, NetworkError
@@ -306,7 +306,9 @@ class BTCForensicsPro:
                     "to_address": tx.get("to_address", ""),
                     "amount": tx.get("amount", 0.0),
                     "block_time": tx.get("block_time", 0),
-                    "is_change": tx.get("is_change", False)
+                    "is_change": tx.get("is_change", False),
+                    "from_entity_type": tx.get("from_entity_type", "unknown"),
+                    "to_entity_type": tx.get("to_entity_type", "unknown")
                 }
                 raw_transactions.append(raw_tx)
             
@@ -437,11 +439,12 @@ class BTCForensicsPro:
         ext_map = {"json": ".json", "html": ".html", "txt": ".txt"}
         ext = ext_map.get(format_type.lower(), ".txt")
         
-        # Create filename
-        filename = f"forensic_report_{address}_{timestamp}{ext}"
-        filepath = os.path.join(out_dir, filename)
-        
         try:
+            # Create filename
+            safe_address = safe_path_component(address, "address")
+            filename = f"forensic_report_{safe_address}_{timestamp}{ext}"
+            filepath = os.path.join(out_dir, filename)
+
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(report_content)
             
@@ -497,6 +500,11 @@ class BTCForensicsPro:
         """
         self._last_trace_error = ""
         self._progress_callback = progress_callback
+        if hop == 1:
+            # Fresh top-level trace (not a recursive hop expansion) — clear
+            # state left over from a previous, unrelated analysis on this
+            # instance so it doesn't get skipped as "already processed".
+            self.processed_addresses = set()
         try:
             if self.chain == "eth":
                 return self._trace_ethereum(address, hop)
@@ -1254,8 +1262,7 @@ class BTCForensicsPro:
         import os
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        base = f"{out_dir}/report_{address}_{ts}"
-        
+
         # Check if report_text looks like HTML
         is_html = False
         if report_text:
@@ -1264,6 +1271,8 @@ class BTCForensicsPro:
                 is_html = True
 
         try:
+            safe_address = safe_path_component(address, "address")
+            base = f"{out_dir}/report_{safe_address}_{ts}"
             if is_html:
                 # Save as HTML file only
                 html_path = f"{base}.html"
@@ -1524,7 +1533,7 @@ Informe forense:"""
         Returns:
             Dict with sanctions info, identifications, and classification
         """
-        internal_key = os.environ.get("SANCTIONS_INTERNAL_KEY", "")
+        internal_key = self.config.api.sanctions_internal_key
         headers = {
             "X-Internal-Key": internal_key,
         }

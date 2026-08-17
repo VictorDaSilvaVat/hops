@@ -6,6 +6,7 @@ Produces comprehensive HTML and PDF reports with timeline, heatmap, graph and ta
 import os
 import json
 import base64
+import html
 import logging
 import re
 from datetime import datetime
@@ -17,6 +18,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import networkx as nx
 import pandas as pd
+
+from security import safe_path_component
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,8 @@ class EnhancedForensicReporter:
         Returns dict with paths to all generated files.
         """
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        folder = os.path.join(self.output_dir, address, timestamp)
+        safe_address = safe_path_component(address, "address")
+        folder = os.path.join(self.output_dir, safe_address, timestamp)
         os.makedirs(folder, exist_ok=True)
 
         data = self._build_structured_data(address, edges, ollama_narrative, filters)
@@ -221,6 +225,7 @@ class EnhancedForensicReporter:
             return paths
 
         if "ts" in df.columns:
+            fig = None
             try:
                 fig, ax = plt.subplots(figsize=(12, 4))
                 df_time = df[df["ts"].notna()].copy()
@@ -241,12 +246,15 @@ class EnhancedForensicReporter:
 
                 timeline_path = os.path.join(folder, "timeline_chart.png")
                 plt.savefig(timeline_path, dpi=150, bbox_inches="tight")
-                plt.close(fig)
                 paths["timeline"] = timeline_path
             except Exception as e:
                 logger.error(f"Error generating timeline chart: {e}")
+            finally:
+                if fig is not None:
+                    plt.close(fig)
 
         if "ts" in df.columns:
+            fig = None
             try:
                 df_heat = df[df["ts"].notna()].copy()
                 df_heat["hour"] = pd.to_datetime(df_heat["ts"], unit="s").dt.hour
@@ -273,10 +281,12 @@ class EnhancedForensicReporter:
                 plt.tight_layout()
                 heatmap_path = os.path.join(folder, "heatmap_chart.png")
                 plt.savefig(heatmap_path, dpi=150, bbox_inches="tight")
-                plt.close(fig)
                 paths["heatmap"] = heatmap_path
             except Exception as e:
                 logger.error(f"Error generating heatmap chart: {e}")
+            finally:
+                if fig is not None:
+                    plt.close(fig)
 
         return paths
 
@@ -286,6 +296,7 @@ class EnhancedForensicReporter:
         df = pd.DataFrame(edges) if edges else pd.DataFrame()
         if df.empty:
             return None
+        fig = None
         try:
             G = nx.DiGraph()
             for _, r in df.iterrows():
@@ -343,12 +354,14 @@ class EnhancedForensicReporter:
 
             plt.tight_layout()
             plt.savefig(graph_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
             logger.info(f"Graph image saved to {graph_path}")
             return graph_path
         except Exception as e:
             logger.error(f"Error generating graph image: {e}")
             return None
+        finally:
+            if fig is not None:
+                plt.close(fig)
 
     def _generate_html_report(self, folder, data, edges, chart_paths, graph_img_path=None):
         """Generate a comprehensive HTML report."""
@@ -395,15 +408,19 @@ class EnhancedForensicReporter:
                 ts = e.get("ts")
                 dt_str = datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
 
+                # from_addr/to_addr, entity labels, and free-text wallet labels
+                # can all originate from user-editable Neo4j data (the sidebar
+                # "Editar etiquetas" tool) or third-party APIs — escape before
+                # embedding in the report HTML.
                 tx_rows_html += f"""<tr>
-                    <td title="{from_addr}">{from_addr[:20]}...</td>
-                    <td title="{to_addr}">{to_addr[:20]}...</td>
+                    <td title="{html.escape(from_addr)}">{html.escape(from_addr[:20])}...</td>
+                    <td title="{html.escape(to_addr)}">{html.escape(to_addr[:20])}...</td>
                     <td class="num">{amount:.8f}</td>
                     <td class="num">{dt_str}</td>
-                    <td>{from_entity}</td>
-                    <td>{to_entity}</td>
-                    <td>{from_labels}</td>
-                    <td>{to_labels}</td>
+                    <td>{html.escape(str(from_entity))}</td>
+                    <td>{html.escape(str(to_entity))}</td>
+                    <td>{html.escape(str(from_labels))}</td>
+                    <td>{html.escape(str(to_labels))}</td>
                     <td class="num">{hop}</td>
                 </tr>"""
 
@@ -415,14 +432,14 @@ class EnhancedForensicReporter:
                 sankey_df = sankey_df.sort_values("amount", ascending=False).head(50)
                 for _, r in sankey_df.iterrows():
                     sankey_rows_html += f"""<tr>
-                        <td>{r["from_addr"][:20]}...</td>
-                        <td>{r["to_addr"][:20]}...</td>
+                        <td>{html.escape(str(r["from_addr"])[:20])}...</td>
+                        <td>{html.escape(str(r["to_addr"])[:20])}...</td>
                         <td class="num">{float(r["amount"]):.8f}</td>
                     </tr>"""
 
         entity_rows_html = ""
         for ent, count in sorted(data.get("entity_distribution", {}).items(), key=lambda x: -x[1]):
-            entity_rows_html += f"<tr><td>{ent}</td><td class='num'>{count}</td></tr>"
+            entity_rows_html += f"<tr><td>{html.escape(str(ent))}</td><td class='num'>{count}</td></tr>"
 
         sanctions = data.get("sanctions", {})
         san_flag = sanctions.get("sanctioned")
@@ -441,10 +458,10 @@ class EnhancedForensicReporter:
         if san_matches:
             san_matches_html = "<h4>Coincidencias encontradas:</h4><ul>"
             for m in san_matches:
-                san_matches_html += f"<li>{m}</li>"
+                san_matches_html += f"<li>{html.escape(str(m))}</li>"
             san_matches_html += "</ul>"
 
-        ollama_narrative = data.get("ollama_narrative", "")
+        ollama_narrative = html.escape(data.get("ollama_narrative", ""))
 
         html = f"""<!DOCTYPE html>
 <html lang="es">

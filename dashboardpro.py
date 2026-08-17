@@ -466,27 +466,31 @@ def get_driver():
 
 def address_exists(addr, chain="btc"):
     driver = get_driver()
-    with driver.session() as s:
-        r = s.run(
-            "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain RETURN a LIMIT 1",
-            a=addr, chain=chain,
-        ).single()
-    driver.close()
-    return r is not None
+    try:
+        with driver.session() as s:
+            r = s.run(
+                "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain RETURN a LIMIT 1",
+                a=addr, chain=chain,
+            ).single()
+        return r is not None
+    finally:
+        driver.close()
 
 def address_has_relations(addr, chain="btc"):
     driver = get_driver()
-    with driver.session() as s:
-        r = s.run(
-            "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain MATCH (a)-[r:SENT]-() RETURN count(r) AS cnt",
-            a=addr, chain=chain,
-        ).single()
-    driver.close()
-    return r is not None and r["cnt"] > 0
+    try:
+        with driver.session() as s:
+            r = s.run(
+                "MATCH (a:Address {address:$a}) WHERE a.chain IS NULL OR a.chain = $chain MATCH (a)-[r:SENT]-() RETURN count(r) AS cnt",
+                a=addr, chain=chain,
+            ).single()
+        return r is not None and r["cnt"] > 0
+    finally:
+        driver.close()
 
 def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     driver = get_driver()
-    depth_literal = f"*1..{depth}"
+    depth_literal = f"*1..{int(depth)}"
 
     q = f"""
     MATCH (root:Address {{address:$addr}})
@@ -512,31 +516,32 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     """
 
     rows = []
-    with driver.session() as s:
-        for rec in s.run(q, addr=addr, limit=limit, chain=chain):
-            row = dict(rec)
-            if not isinstance(row.get('from_labels'), list):
-                row['from_labels'] = []
-            if not isinstance(row.get('to_labels'), list):
-                row['to_labels'] = []
+    try:
+        with driver.session() as s:
+            for rec in s.run(q, addr=addr, limit=limit, chain=chain):
+                row = dict(rec)
+                if not isinstance(row.get('from_labels'), list):
+                    row['from_labels'] = []
+                if not isinstance(row.get('to_labels'), list):
+                    row['to_labels'] = []
 
-            ts = row.get('ts')
-            if ts:
-                if hasattr(ts, 'to_native'):
-                    ts = ts.to_native()
-                if hasattr(ts, 'timestamp'):
-                    ts = ts.timestamp()
-                try:
-                    row['ts'] = int(float(ts))
-                except (ValueError, TypeError):
+                ts = row.get('ts')
+                if ts:
+                    if hasattr(ts, 'to_native'):
+                        ts = ts.to_native()
+                    if hasattr(ts, 'timestamp'):
+                        ts = ts.timestamp()
+                    try:
+                        row['ts'] = int(float(ts))
+                    except (ValueError, TypeError):
+                        row['ts'] = 0
+                else:
                     row['ts'] = 0
-            else:
-                row['ts'] = 0
 
-            rows.append(row)
-
-    driver.close()
-    return rows
+                rows.append(row)
+        return rows
+    finally:
+        driver.close()
 
 # -------------------------
 # Graph
@@ -709,7 +714,12 @@ def show_dashboard(addr, filters, chain="btc"):
     if filters["only_fanin"]:
         edges = [e for e in edges if e.get("to_addr") == addr]
     if filters["only_fanout"]:
-        edges = [e for e in edges if e.get("from_addr") == addr or (e.get("hop") is not None and int(e.get("hop")) > 1)]
+        # Mirrors the "only_fanin" filter above: an edge only qualifies as
+        # fan-out if it directly originates from the analyzed address.
+        # (hop > 1 edges are between two *other* addresses and are neither
+        # fan-in nor fan-out of `addr` — including them here previously let
+        # almost every hop>=2 edge through regardless of direction.)
+        edges = [e for e in edges if e.get("from_addr") == addr]
     if filters["hide_change"]:
         edges = [e for e in edges if not e.get("is_change", False)]
     if filters["entity"] != "Todas":
@@ -981,16 +991,18 @@ def main():
             search_addr = st.text_input("Buscar dirección", placeholder="Dirección completa o parcial...", label_visibility="collapsed")
             if search_addr:
                 driver = get_driver()
-                with driver.session() as s:
-                    results = list(s.run("""
-                        MATCH (a:Address)
-                        WHERE a.address CONTAINS $q OR ANY(lab IN a.labels WHERE lab CONTAINS $q)
-                        RETURN a.address AS address, a.chain AS chain,
-                               a.entity_type AS entity_type, a.labels AS labels,
-                               a.wallet_id AS wallet_id
-                        LIMIT 15
-                    """, q=search_addr))
-                driver.close()
+                try:
+                    with driver.session() as s:
+                        results = list(s.run("""
+                            MATCH (a:Address)
+                            WHERE a.address CONTAINS $q OR ANY(lab IN a.labels WHERE lab CONTAINS $q)
+                            RETURN a.address AS address, a.chain AS chain,
+                                   a.entity_type AS entity_type, a.labels AS labels,
+                                   a.wallet_id AS wallet_id
+                            LIMIT 15
+                        """, q=search_addr))
+                finally:
+                    driver.close()
                 if results:
                     for rec in results:
                         addr = rec["address"]
@@ -1010,14 +1022,16 @@ def main():
                             parsed = [x.strip() for x in new_labels.split(",") if x.strip()]
                             parsed = list(dict.fromkeys(parsed))
                             driver2 = get_driver()
-                            with driver2.session() as s2:
-                                s2.run("""
-                                    MATCH (a:Address {address: $addr})
-                                    SET a.labels = $labels,
-                                        a.entity_type = $entity_type,
-                                        a.updated_at = datetime()
-                                """, addr=addr, labels=parsed, entity_type=new_entity)
-                            driver2.close()
+                            try:
+                                with driver2.session() as s2:
+                                    s2.run("""
+                                        MATCH (a:Address {address: $addr})
+                                        SET a.labels = $labels,
+                                            a.entity_type = $entity_type,
+                                            a.updated_at = datetime()
+                                    """, addr=addr, labels=parsed, entity_type=new_entity)
+                            finally:
+                                driver2.close()
                             st.success(f"✓ {addr[:16]}...")
                             st.rerun()
                         st.divider()
@@ -1110,36 +1124,42 @@ def main():
         st.session_state.ai_report = None
 
         tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=min_amount)
-        if not address_has_relations(addr, chain=chain):
-            # Progress container
-            progress_placeholder = st.empty()
-            progress_container = st.status("Iniciando rastreo...", expanded=True)
-            
-            def progress_callback(message: str):
-                progress_container.update(label=message, state="running")
-            
-            ok = tracer.trace(addr, progress_callback=progress_callback)
-            
-            progress_container.update(label="¡Rastreo completado!", state="complete" if ok else "error")
-            
-            if not ok:
-                detail = getattr(tracer, '_last_trace_error', '')
-                msg = f"No se pudieron obtener transacciones para {addr} en {unit.upper()}."
-                if detail:
-                    msg += f"\n\nDetalle: {detail}"
-                if chain == "eth":
-                    msg += "\n\nVerifica que la dirección sea válida y que ETHERSCAN_API_KEY esté configurada."
-                elif chain == "bch":
-                    msg += "\n\nVerifica que la dirección sea válida (usa formato legacy 1... o cashaddr q...)."
-                elif chain == "trx":
-                    msg += "\n\nVerifica que la dirección sea válida (formato T...)."
-                else:
-                    msg += "\n\nVerifica que la dirección sea válida."
-                st.error(msg)
-                tracer.close()
-                return
+        try:
+            if not address_has_relations(addr, chain=chain):
+                # Progress container
+                progress_placeholder = st.empty()
+                progress_container = st.status("Iniciando rastreo...", expanded=True)
+
+                def progress_callback(message: str):
+                    progress_container.update(label=message, state="running")
+
+                try:
+                    ok = tracer.trace(addr, progress_callback=progress_callback)
+                except Exception as e:
+                    progress_container.update(label="Error durante el rastreo", state="error")
+                    st.error(f"Ocurrió un error inesperado al rastrear {addr}: {e}")
+                    return
+
+                progress_container.update(label="¡Rastreo completado!", state="complete" if ok else "error")
+
+                if not ok:
+                    detail = getattr(tracer, '_last_trace_error', '')
+                    msg = f"No se pudieron obtener transacciones para {addr} en {unit.upper()}."
+                    if detail:
+                        msg += f"\n\nDetalle: {detail}"
+                    if chain == "eth":
+                        msg += "\n\nVerifica que la dirección sea válida y que ETHERSCAN_API_KEY esté configurada."
+                    elif chain == "bch":
+                        msg += "\n\nVerifica que la dirección sea válida (usa formato legacy 1... o cashaddr q...)."
+                    elif chain == "trx":
+                        msg += "\n\nVerifica que la dirección sea válida (formato T...)."
+                    else:
+                        msg += "\n\nVerifica que la dirección sea válida."
+                    st.error(msg)
+                    return
+                st.session_state.analysis_done = True
+        finally:
             tracer.close()
-            st.session_state.analysis_done = True
 
     if st.session_state.analysis_done and st.session_state.last_address:
         show_dashboard(st.session_state.last_address, filters, chain=chain)
