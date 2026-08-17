@@ -1051,7 +1051,17 @@ def main():
 
         tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=min_amount)
         if not address_has_relations(addr, chain=chain):
-            ok = tracer.trace(addr)
+            # Progress container
+            progress_placeholder = st.empty()
+            progress_container = st.status("Iniciando rastreo...", expanded=True)
+            
+            def progress_callback(message: str):
+                progress_container.update(label=message, state="running")
+            
+            ok = tracer.trace(addr, progress_callback=progress_callback)
+            
+            progress_container.update(label="¡Rastreo completado!", state="complete" if ok else "error")
+            
             if not ok:
                 detail = getattr(tracer, '_last_trace_error', '')
                 msg = f"No se pudieron obtener transacciones para {addr} en {unit.upper()}."
@@ -1068,8 +1078,8 @@ def main():
                 st.error(msg)
                 tracer.close()
                 return
-        tracer.close()
-        st.session_state.analysis_done = True
+            tracer.close()
+            st.session_state.analysis_done = True
 
     if st.session_state.analysis_done and st.session_state.last_address:
         show_dashboard(st.session_state.last_address, filters, chain=chain)

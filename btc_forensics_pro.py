@@ -482,13 +482,21 @@ class BTCForensicsPro:
     # LEGACY COMPATIBILITY METHODS (maintained for backward compatibility)
     # ---------------------------------------------------------
     
-    def trace(self, address: str, hop: int = 1, direction: str = "both") -> bool:
+    def trace(self, address: str, hop: int = 1, direction: str = "both",
+               progress_callback: Optional[Callable[[str], None]] = None) -> bool:
         """
         Trace transactions from an address.
         Dispatches to chain-specific implementation.
         Returns True if any data was saved.
+
+        Args:
+            address: Address to trace
+            hop: Starting hop number
+            direction: "fanin", "fanout", or "both"
+            progress_callback: Optional callback(status_message) for progress updates
         """
         self._last_trace_error = ""
+        self._progress_callback = progress_callback
         try:
             if self.chain == "eth":
                 return self._trace_ethereum(address, hop)
@@ -505,6 +513,15 @@ class BTCForensicsPro:
             self._last_trace_error = str(e)
             self.log("error", f"Unhandled exception in trace: {e}")
             return False
+
+    def _report_progress(self, message: str):
+        """Report progress via callback if provided."""
+        if self._progress_callback:
+            try:
+                self._progress_callback(message)
+            except Exception:
+                pass  # Don't let callback errors break tracing
+        self.log("info", message)
 
     def _trace_legacy(self, address: str, hop: int = 1, direction: str = "both") -> bool:
         """Legacy trace implementation from Phase 2.
@@ -931,6 +948,7 @@ class BTCForensicsPro:
         self.processed_addresses.add(key)
 
         try:
+            self._report_progress(f"Obteniendo transacciones ADA para {address[:16]}... (hop {hop})")
             txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="ada")
         except Exception as e:
             msg = f"Failed to get ADA transactions for {address}: {e}"
@@ -944,6 +962,7 @@ class BTCForensicsPro:
             self._last_trace_error = msg
             return False
 
+        self._report_progress(f"Encontradas {len(txs)} transacciones ADA para {address[:16]}...")
         self.log("info", f"Found {len(txs)} ADA transactions for {address}")
 
         # Analyze and save the address
@@ -953,18 +972,17 @@ class BTCForensicsPro:
         except Exception as e:
             self.log("error", f"Failed to analyze/save ADA address {address}: {e}")
 
-        for tx in txs:
+        total_txs = len(txs)
+        for i, tx in enumerate(txs):
             if not isinstance(tx, dict):
                 continue
             txid = tx.get("txid")
             if not txid:
                 continue
 
+            self._report_progress(f"Procesando transacción {i+1}/{total_txs}: {txid[:16]}...")
+
             # Cardano transactions have 'inputs' and 'outputs' arrays
-            inputs = tx.get("inputs", [])
-            outputs = tx.get("outputs", [])
-            block_time = tx.get("block_time", 0)
-            fees = tx.get("fees", 0)
 
             # Calculate sent/received amounts for this address
             sent_amount = 0
@@ -1011,8 +1029,9 @@ class BTCForensicsPro:
 
                     # Recurse for fanout
                     if hop < self.max_hops:
+                        self._report_progress(f"Rastreando salida a {to_addr[:16]}... (hop {hop+1})")
                         time.sleep(self.rate_limit_delay)
-                        self.trace(to_addr, hop + 1, direction="fanout")
+                        self.trace(to_addr, hop + 1, direction="fanout", progress_callback=self._progress_callback)
 
             # FAN-IN: address receives ADA
             if received_amount > 0:
@@ -1043,8 +1062,9 @@ class BTCForensicsPro:
 
                     # Recurse for fanin (only hop 1)
                     if hop == 1:
+                        self._report_progress(f"Rastreando origen {from_addr[:16]}... (hop {hop+1})")
                         time.sleep(self.rate_limit_delay)
-                        self.trace(from_addr, hop + 1, direction="fanin")
+                        self.trace(from_addr, hop + 1, direction="fanin", progress_callback=self._progress_callback)
 
         return True
 
