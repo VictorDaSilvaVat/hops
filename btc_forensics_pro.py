@@ -496,6 +496,10 @@ class BTCForensicsPro:
                 if direction in ("fanin", "fanout"):
                     self.log("debug", f"TRX ignoring direction param {direction}, using both")
                 return self._trace_tron(address, hop)
+            if self.chain == "ada":
+                if direction in ("fanin", "fanout"):
+                    self.log("debug", f"ADA ignoring direction param {direction}, using both")
+                return self._trace_cardano(address, hop)
             return self._trace_legacy(address, hop, direction)
         except Exception as e:
             self._last_trace_error = str(e)
@@ -909,6 +913,138 @@ class BTCForensicsPro:
                 if hop == 1:
                     time.sleep(self.rate_limit_delay)
                     self.trace(from_addr, hop + 1, direction="fanin")
+
+        return True
+
+    def _trace_cardano(self, address: str, hop: int = 1) -> bool:
+        """Trace Cardano (ADA) transactions from an address via Blockfrost API.
+        Cardano uses UTxO model similar to Bitcoin.
+        Returns True if any data was saved to Neo4j.
+        """
+        if hop > self.max_hops:
+            self._last_trace_error = f"max_hops ({self.max_hops}) reached"
+            return False
+
+        key = f"ada-{address}-{hop}"
+        if key in self.processed_addresses:
+            return True
+        self.processed_addresses.add(key)
+
+        try:
+            txs = self.blockchain_api.get_address_transactions(address, limit=200, chain="ada")
+        except Exception as e:
+            msg = f"Failed to get ADA transactions for {address}: {e}"
+            self.log("error", msg)
+            self._last_trace_error = msg
+            return False
+
+        if not txs:
+            msg = f"No ADA transactions found for {address}"
+            self.log("debug", msg)
+            self._last_trace_error = msg
+            return False
+
+        self.log("info", f"Found {len(txs)} ADA transactions for {address}")
+
+        # Analyze and save the address
+        try:
+            address_model = self.address_analyzer.analyze_address(address)
+            self.neo4j_repo.save_address(address_model)
+        except Exception as e:
+            self.log("error", f"Failed to analyze/save ADA address {address}: {e}")
+
+        for tx in txs:
+            if not isinstance(tx, dict):
+                continue
+            txid = tx.get("txid")
+            if not txid:
+                continue
+
+            # Cardano transactions have 'inputs' and 'outputs' arrays
+            inputs = tx.get("inputs", [])
+            outputs = tx.get("outputs", [])
+            block_time = tx.get("block_time", 0)
+            fees = tx.get("fees", 0)
+
+            # Calculate sent/received amounts for this address
+            sent_amount = 0
+            received_amount = 0
+
+            for inp in inputs:
+                if isinstance(inp, dict) and inp.get("address") == address:
+                    sent_amount += inp.get("amount", 0)
+
+            for out in outputs:
+                if isinstance(out, dict) and out.get("address") == address:
+                    received_amount += out.get("amount", 0)
+
+            # Skip dust amounts
+            if hop == 1 and received_amount < self.min_amount and sent_amount < self.min_amount:
+                continue
+
+            # FAN-OUT: address sends ADA
+            if sent_amount > 0:
+                for out in outputs:
+                    if not isinstance(out, dict):
+                        continue
+                    to_addr = out.get("address")
+                    amount = out.get("amount", 0)
+                    if not to_addr or amount <= 0:
+                        continue
+                    if amount < self.min_amount:
+                        continue
+
+                    tx_payload = {
+                        "txid": tx.get("txid"),
+                        "from_address": address,
+                        "to_address": to_addr,
+                        "amount": amount,
+                        "block_time": block_time,
+                        "is_change": False,
+                        "hop": hop,
+                        "chain": "ada",
+                    }
+                    try:
+                        self.neo4j_repo.save_transaction(**tx_payload)
+                    except Exception as e:
+                        self.log("error", f"Failed to save ADA tx {txid}: {e}")
+
+                    # Recurse for fanout
+                    if hop < self.max_hops:
+                        time.sleep(self.rate_limit_delay)
+                        self.trace(to_addr, hop + 1, direction="fanout")
+
+            # FAN-IN: address receives ADA
+            if received_amount > 0:
+                for inp in inputs:
+                    if not isinstance(inp, dict):
+                        continue
+                    from_addr = inp.get("address")
+                    amount = inp.get("amount", 0)
+                    if not from_addr or amount <= 0:
+                        continue
+                    if amount < self.min_amount:
+                        continue
+
+                    tx_payload = {
+                        "txid": tx.get("txid"),
+                        "from_address": from_addr,
+                        "to_address": address,
+                        "amount": amount,
+                        "block_time": block_time,
+                        "is_change": False,
+                        "hop": hop,
+                        "chain": "ada",
+                    }
+                    try:
+                        self.neo4j_repo.save_transaction(**tx_payload)
+                    except Exception as e:
+                        self.log("error", f"Failed to save ADA tx {txid}: {e}")
+
+                    # Recurse for fanin (only hop 1)
+                    if hop == 1:
+                        time.sleep(self.rate_limit_delay)
+                        self.trace(from_addr, hop + 1, direction="fanin")
 
         return True
 

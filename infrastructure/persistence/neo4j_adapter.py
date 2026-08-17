@@ -419,7 +419,7 @@ class Neo4jAdapter(Neo4jRepository):
             rel.amount AS amount,
             rel.txid AS txid,
             coalesce(rel.hop, 1) AS hop,
-            coalesce(rel.block_time, rel.timestamp) AS ts,
+            rel.block_time AS ts,
             coalesce(rel.is_change, false) AS is_change,
             a.entity_type AS from_entity,
             b.entity_type AS to_entity,
