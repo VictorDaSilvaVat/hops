@@ -300,6 +300,7 @@ st.markdown("""
         border-radius: 10px;
         padding: 16px 20px;
         transition: all 0.2s;
+        position: relative;
     }
     .metric-card:hover {
         border-color: rgba(99,102,241,0.3);
@@ -310,12 +311,66 @@ st.markdown("""
         letter-spacing: 0.05em;
         color: #64748b;
         font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 4px;
     }
     .metric-card .value {
         font-size: 22px;
         font-weight: 700;
         color: #e2e8f0;
         margin-top: 4px;
+    }
+
+    /* Tooltip for risk panel */
+    .tooltip {
+        position: relative;
+        cursor: help;
+        font-size: 10px;
+        color: #6366f1;
+        margin-left: 4px;
+    }
+    .tooltip::after {
+        content: attr(title);
+        position: absolute;
+        bottom: 125%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1e293b;
+        color: #e2e8f0;
+        padding: 10px 14px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 400;
+        white-space: pre-line;
+        width: max-content;
+        max-width: 320px;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.2s;
+        z-index: 100;
+        border: 1px solid rgba(99,102,241,0.3);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        text-transform: none;
+        letter-spacing: normal;
+        font-weight: 400;
+    }
+    .tooltip::before {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border: 6px solid transparent;
+        border-top-color: #1e293b;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.2s;
+    }
+    .tooltip:hover::after,
+    .tooltip:hover::before {
+        opacity: 1;
+        visibility: visible;
     }
 
     /* Report section */
@@ -597,7 +652,7 @@ def show_risk(edges, root, chain="btc"):
         st.info("Sin datos para panel de riesgo.")
         return
 
-    unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX"}.get(chain, "BTC")
+    unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
     df = pd.DataFrame(edges)
     df = df[df["amount"].notnull()]
     if df.empty:
@@ -620,7 +675,12 @@ def show_risk(edges, root, chain="btc"):
     with col2:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="label">Total saliente</div>
+            <div class="label">Total saliente <span class="tooltip" title="El total saliente puede ser mayor que el entrante porque:
+• El análisis tiene profundidad limitada (N hops)
+• Cambios (change) en modelo UTXO (BTC, ADA, BCH)
+• Direcciones de cambio distintas
+• Saldo previo no rastreado
+• Filtrado de transacciones pequeñas">ℹ️</span></div>
             <div class="value">{total_out:.8f} {unit}</div>
         </div>
         """, unsafe_allow_html=True)
