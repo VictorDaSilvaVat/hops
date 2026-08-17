@@ -7,7 +7,7 @@ import json
 import logging
 import requests
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 import pandas as pd
 from neo4j import GraphDatabase
 
