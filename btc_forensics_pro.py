@@ -991,6 +991,9 @@ class BTCForensicsPro:
             self._report_progress(f"Procesando transacción {i+1}/{total_txs}: {txid[:16]}...")
 
             # Cardano transactions have 'inputs' and 'outputs' arrays
+            inputs = tx.get("inputs", [])
+            outputs = tx.get("outputs", [])
+            block_time = tx.get("block_time", 0)
 
             # Calculate sent/received amounts for this address
             sent_amount = 0
