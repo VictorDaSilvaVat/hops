@@ -8,9 +8,13 @@ from forensic_report_v2 import EnhancedForensicReporter
 import time
 import json
 import base64
+import html
 import os
 import zipfile
 import io
+import tempfile
+import uuid
+from datetime import datetime, timezone
 from pyvis.network import Network
 import streamlit.components.v1 as components
 import base58
@@ -546,43 +550,153 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
 # -------------------------
 # Graph
 # -------------------------
-def show_graph(edges):
+GRAPH_ENTITY_COLORS = {
+    "exchange": "#3b82f6",
+    "mixer": "#ef4444",
+    "sanctioned": "#b91c1c",
+    "darknet_market": "#7f1d1d",
+    "darkmarket": "#7f1d1d",
+    "gambling": "#f59e0b",
+    "bridge": "#22c55e",
+    "wallet_service": "#06b6d4",
+    "mining_pool": "#8b5cf6",
+    "defi_protocol": "#14b8a6",
+    "marketplace": "#f97316",
+    "individual": "#6b7280",
+    "unknown": "#6b7280",
+    "other": "#6b7280",
+    None: "#6b7280",
+}
+GRAPH_ROOT_COLOR = "#fbbf24"
+GRAPH_HIGH_RISK_ENTITIES = {"mixer", "sanctioned", "darknet_market", "darkmarket"}
+
+
+def _fmt_labels(labels):
+    if isinstance(labels, list):
+        labels = ", ".join(labels)
+    return html.escape(str(labels)) if labels else ""
+
+
+def show_graph(edges, root_addr=None, unit="BTC"):
     if not edges:
         st.info("Sin datos para grafo.")
         return
 
-    net = Network(height="600px", width="100%", directed=True, bgcolor="#1a1d2e", font_color="white")
+    net = Network(height="650px", width="100%", directed=True, bgcolor="#1a1d2e", font_color="white")
 
-    color_map = {
-        "exchange": "#3b82f6",
-        "mixer": "#ef4444",
-        "sanctioned": "#dc2626",
-        "bridge": "#22c55e",
-        "other": "#6b7280",
-        None: "#6b7280"
-    }
-
+    # Total volume per node, used to scale node size (bigger node = more funds through it).
+    node_volume = {}
     for e in edges:
-        fe = e.get("from_entity", "other")
-        te = e.get("to_entity", "other")
+        amt = float(e.get("amount") or 0)
+        node_volume[e["from_addr"]] = node_volume.get(e["from_addr"], 0.0) + amt
+        node_volume[e["to_addr"]] = node_volume.get(e["to_addr"], 0.0) + amt
+    max_volume = max(node_volume.values()) if node_volume else 1.0
+    max_amount = max((float(e.get("amount") or 0) for e in edges), default=1.0) or 1.0
 
-        net.add_node(e["from_addr"], label=e["from_addr"][:12] + "...", color=color_map.get(fe, "#6b7280"))
-        net.add_node(e["to_addr"], label=e["to_addr"][:12] + "...", color=color_map.get(te, "#6b7280"))
+    def node_size(addr):
+        if addr == root_addr:
+            return 42
+        vol = node_volume.get(addr, 0.0)
+        return 14 + 26 * ((vol / max_volume) ** 0.5 if max_volume else 0)
 
-        net.add_edge(e["from_addr"], e["to_addr"], value=float(e["amount"]))
+    def add_node(addr, entity, labels):
+        if addr in added_nodes:
+            return
+        added_nodes.add(addr)
+        is_root = addr == root_addr
+        is_high_risk = entity in GRAPH_HIGH_RISK_ENTITIES
+        label_text = _fmt_labels(labels)
+        tooltip = (
+            f"<b>{html.escape(addr)}</b><br>"
+            f"Entidad: {html.escape(str(entity or 'unknown'))}<br>"
+            f"Volumen total: {node_volume.get(addr, 0.0):.8f} {unit}"
+        )
+        if label_text:
+            tooltip += f"<br>Etiquetas: {label_text}"
+        if is_root:
+            tooltip += "<br><b>&#128204; Direccion analizada</b>"
 
-    net.repulsion(node_distance=180, central_gravity=0.33, spring_length=150)
+        net.add_node(
+            addr,
+            label=("\U0001F3AF " if is_root else "") + addr[:12] + "...",
+            title=tooltip,
+            color={
+                "background": GRAPH_ROOT_COLOR if is_root else GRAPH_ENTITY_COLORS.get(entity, "#6b7280"),
+                "border": "#fef3c7" if is_root else ("#f87171" if is_high_risk else "#1a1d2e"),
+            },
+            borderWidth=4 if (is_root or is_high_risk) else 1,
+            size=node_size(addr),
+            shape="dot",
+        )
 
-    net.save_graph("graph.html")
+    added_nodes = set()
+    for e in edges:
+        add_node(e["from_addr"], e.get("from_entity"), e.get("from_labels"))
+        add_node(e["to_addr"], e.get("to_entity"), e.get("to_labels"))
 
-    with open("graph.html", "r", encoding="utf-8") as f:
-        html = f.read()
+        amt = float(e.get("amount") or 0)
+        width = 1 + 7 * (amt / max_amount)
+        ts = e.get("ts")
+        date_str = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M") if ts else "?"
+        txid = e.get("txid") or ""
+        edge_tooltip = (
+            f"Monto: {amt:.8f} {unit}<br>"
+            f"Fecha: {date_str} UTC<br>"
+            f"Hop: {e.get('hop', '?')}<br>"
+            f"TX: {html.escape(txid[:24])}..."
+        )
+        net.add_edge(
+            e["from_addr"], e["to_addr"],
+            value=amt, width=width, title=edge_tooltip,
+            color={"color": "#4b5563", "highlight": "#fbbf24", "hover": "#9ca3af"},
+            arrowStrikethrough=False,
+        )
 
-    html_base64 = base64.b64encode(html.encode('utf-8')).decode('utf-8')
+    net.set_options("""
+    {
+      "physics": {"solver": "forceAtlas2Based", "forceAtlas2Based": {"gravitationalConstant": -60, "centralGravity": 0.008, "springLength": 160, "avoidOverlap": 0.6}, "stabilization": {"iterations": 150}},
+      "edges": {"smooth": {"type": "dynamic"}, "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}},
+      "interaction": {"hover": true, "tooltipDelay": 100, "navigationButtons": true, "keyboard": true}
+    }
+    """)
+
+    # Unique filename avoids collisions between concurrent Streamlit sessions
+    # viewing different addresses at the same time.
+    graph_file = os.path.join(tempfile.gettempdir(), f"hops_graph_{uuid.uuid4().hex}.html")
+    try:
+        net.save_graph(graph_file)
+        with open(graph_file, "r", encoding="utf-8") as f:
+            graph_html = f.read()
+    finally:
+        if os.path.exists(graph_file):
+            os.remove(graph_file)
+
+    html_base64 = base64.b64encode(graph_html.encode('utf-8')).decode('utf-8')
     iframe_src = f"data:text/html;base64,{html_base64}"
 
+    legend_items = [
+        ("Direccion analizada", GRAPH_ROOT_COLOR),
+        ("Exchange", GRAPH_ENTITY_COLORS["exchange"]),
+        ("Mixer", GRAPH_ENTITY_COLORS["mixer"]),
+        ("Sancionado / Darknet", GRAPH_ENTITY_COLORS["sanctioned"]),
+        ("Bridge", GRAPH_ENTITY_COLORS["bridge"]),
+        ("Gambling", GRAPH_ENTITY_COLORS["gambling"]),
+        ("Wallet service", GRAPH_ENTITY_COLORS["wallet_service"]),
+        ("Desconocido / individual", GRAPH_ENTITY_COLORS["unknown"]),
+    ]
+    legend_html = "".join(
+        f'<span style="display:inline-flex;align-items:center;gap:6px;margin-right:16px;font-size:12px;color:#d1d5db;">'
+        f'<span style="width:12px;height:12px;border-radius:50%;background:{color};display:inline-block;"></span>{label}</span>'
+        for label, color in legend_items
+    )
     st.markdown(
-        f'<iframe src="{iframe_src}" width="100%" height="600" style="border:none; border-radius: 10px;"></iframe>',
+        f'<div style="margin-bottom:8px;">{legend_html}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("El tamaño del nodo refleja el volumen total que pasa por esa dirección. El grosor de la arista refleja el monto de la transacción. Pase el cursor sobre nodos y aristas para ver detalles.")
+
+    st.markdown(
+        f'<iframe src="{iframe_src}" width="100%" height="650" style="border:none; border-radius: 10px;"></iframe>',
         unsafe_allow_html=True
     )
 
@@ -732,10 +846,12 @@ def show_dashboard(addr, filters, chain="btc"):
         st.warning("Tras aplicar filtros no quedan relaciones.")
         return
 
+    unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
+
     tabs = st.tabs(["Grafo", "Sankey", "Heatmap", "Timeline", "Tabla", "Riesgo", "Reporte IA", "Grafo Detallado"])
 
     with tabs[0]:
-        show_graph(edges)
+        show_graph(edges, root_addr=addr, unit=unit)
 
     with tabs[1]:
         show_sankey(edges)

@@ -463,7 +463,7 @@ class EnhancedForensicReporter:
 
         ollama_narrative = html.escape(data.get("ollama_narrative", ""))
 
-        html = f"""<!DOCTYPE html>
+        html_doc = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -593,7 +593,7 @@ class EnhancedForensicReporter:
 
         html_path = os.path.join(folder, "report.html")
         with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html)
+            f.write(html_doc)
 
         logger.info(f"HTML report saved to {html_path}")
         return html_path
