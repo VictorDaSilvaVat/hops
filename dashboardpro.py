@@ -5,6 +5,7 @@ import altair as alt
 from neo4j import GraphDatabase
 from btc_forensics_pro import BTCForensicsPro
 from forensic_report_v2 import EnhancedForensicReporter
+from infrastructure.adapters.blockfrost_adapter import BlockfrostAdapter
 import time
 import json
 import base64
@@ -548,6 +549,64 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
         driver.close()
 
 # -------------------------
+# ADA native tokens (Cardano)
+# -------------------------
+@st.cache_data(ttl=300, show_spinner=False)
+def get_ada_address_tokens(address: str):
+    """Fetch native tokens currently held by a Cardano address, resolved
+    with on-chain metadata (ticker/name) where the project registered it.
+    Mirrors what a block explorer's "Tokens" tab shows for the address."""
+    try:
+        adapter = BlockfrostAdapter()
+        return adapter.get_address_tokens(address)
+    except Exception:
+        return []
+
+
+def show_ada_tokens(addr):
+    tokens = get_ada_address_tokens(addr)
+    with st.expander(f"🪙 Tokens nativos en esta dirección ({len(tokens)})", expanded=bool(tokens)):
+        if not tokens:
+            st.caption("No se encontraron tokens nativos (o BLOCKFROST_API_KEY no está configurada).")
+            return None
+
+        df_tokens = pd.DataFrame([
+            {
+                "Token": t["ticker"] or t["display_name"],
+                "Nombre on-chain": t["display_name"],
+                "Cantidad": t["quantity"],
+                "Policy ID": t["policy_id"],
+                "Asset (hex)": t["asset_name_hex"],
+            }
+            for t in tokens
+        ])
+        st.dataframe(df_tokens, use_container_width=True, hide_index=True)
+
+        # Flag potential impersonation: same display name/ticker, different policy_id.
+        dupes = df_tokens[df_tokens.duplicated(subset=["Token"], keep=False)]
+        if not dupes.empty:
+            st.warning(
+                "⚠️ Hay más de un token con el mismo nombre pero distinto Policy ID en esta dirección "
+                "— revisa el Policy ID antes de asumir que se trata del token legítimo:\n\n"
+                + "\n".join(f"- **{t}**: {', '.join(dupes[dupes['Token'] == t]['Policy ID'])}"
+                             for t in dupes["Token"].unique())
+            )
+
+        options = sorted({t["ticker"] or t["display_name"] for t in tokens})
+        selected = st.multiselect(
+            "Filtrar tabla de tokens por nombre",
+            options=options,
+            default=[],
+            help="Filtro sobre los tokens que tiene esta dirección ahora mismo. "
+                 "Filtrar el grafo de transacciones por movimientos de un token "
+                 "específico es una mejora futura (requiere rastrear transferencias "
+                 "de tokens, no solo saldos)."
+        )
+        if selected:
+            st.dataframe(df_tokens[df_tokens["Token"].isin(selected)], use_container_width=True, hide_index=True)
+        return selected
+
+# -------------------------
 # Graph
 # -------------------------
 GRAPH_ENTITY_COLORS = {
@@ -848,6 +907,9 @@ def show_dashboard(addr, filters, chain="btc"):
 
     unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
 
+    if chain == "ada":
+        show_ada_tokens(addr)
+
     tabs = st.tabs(["Grafo", "Sankey", "Heatmap", "Timeline", "Tabla", "Riesgo", "Reporte IA", "Grafo Detallado"])
 
     with tabs[0]:
@@ -893,32 +955,39 @@ def show_dashboard(addr, filters, chain="btc"):
         with col_legacy:
             if st.button("Generar reporte IA (simple)", use_container_width=True):
                 tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
-                resumen = tracer.build_summary(st.session_state.last_address)
-                reporte = tracer.generate_ai_report_with_ollama(resumen, model=OLLAMA_MODEL)
-                st.session_state.ai_report = reporte
-                st.session_state.transaction_graph = tracer.generate_transaction_graph_html(
-                    st.session_state.last_address, limit=100
-                )
-                paths = tracer.save_report_to_files(st.session_state.last_address, reporte)
-                metadata = {
-                    "model": OLLAMA_MODEL,
-                    "generated_at": int(time.time()),
-                    "filters": filters
-                }
-                tracer.save_report_to_neo4j(st.session_state.last_address, reporte, model=OLLAMA_MODEL, metadata=metadata)
-                tracer.close()
+                try:
+                    resumen = tracer.build_summary(st.session_state.last_address)
+                    reporte = tracer.generate_ai_report_with_ollama(
+                        resumen, model=OLLAMA_MODEL, address=st.session_state.last_address
+                    )
+                    st.session_state.ai_report = reporte
+                    st.session_state.transaction_graph = tracer.generate_transaction_graph_html(
+                        st.session_state.last_address, limit=100
+                    )
+                    paths = tracer.save_report_to_files(st.session_state.last_address, reporte)
+                    metadata = {
+                        "model": OLLAMA_MODEL,
+                        "generated_at": int(time.time()),
+                        "filters": filters
+                    }
+                    tracer.save_report_to_neo4j(st.session_state.last_address, reporte, model=OLLAMA_MODEL, metadata=metadata)
+                finally:
+                    tracer.close()
                 st.success("Reporte simple generado.")
 
         with col_enhanced:
             if st.button("Generar reporte IA + PDF (completo)", use_container_width=True):
                 with st.spinner("Generando reporte completo..."):
                     tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
-                    result = tracer.generate_enhanced_report(
-                        st.session_state.last_address,
-                        filters=filters,
-                        depth=TRACER_PARAMS["max_hops"],
-                        model=OLLAMA_MODEL,
-                    )
+                    try:
+                        result = tracer.generate_enhanced_report(
+                            st.session_state.last_address,
+                            filters=filters,
+                            depth=TRACER_PARAMS["max_hops"],
+                            model=OLLAMA_MODEL,
+                        )
+                    finally:
+                        tracer.close()
                     if "error" in result:
                         st.error(result["error"])
                     else:
@@ -931,7 +1000,11 @@ def show_dashboard(addr, filters, chain="btc"):
                         else:
                             st.session_state.ai_report = result.get("ollama_narrative", "")
                         st.session_state.transaction_graph = result.get("graph")
-                    tracer.close()
+                        risk = result.get("risk_score") or {}
+                        if risk:
+                            st.success(f"Reporte completo generado — Riesgo: {risk.get('level')} ({risk.get('total')}/100)")
+                        else:
+                            st.success("Reporte completo generado.")
 
         st.markdown("---")
         col_pericial, col_compliance = st.columns(2)
@@ -979,8 +1052,57 @@ def show_dashboard(addr, filters, chain="btc"):
                         tracer.close()
 
         with col_compliance:
-            st.info("🔒 Informe Compliance — próximamente")
-            st.button("Generar Informe Compliance", disabled=True, use_container_width=True)
+            with st.expander("🛡️ Datos del caso para Informe Compliance", expanded=False):
+                entity_name = st.text_input("Entidad / sujeto obligado solicitante", placeholder="ej: Exchange XYZ — Depto. Compliance", key="compliance_entity")
+                review_reason = st.selectbox(
+                    "Motivo del análisis",
+                    ["Onboarding KYC", "Monitorización continua", "Alerta de transacción sospechosa", "Offboarding", "Revisión periódica de cartera de riesgo"],
+                    key="compliance_reason",
+                )
+                analyst = st.text_input("Analista responsable", placeholder="ej: María López", key="compliance_analyst")
+                internal_ref = st.text_input("Nº de referencia interno (opcional)", placeholder="ej: AML-2026-0142", key="compliance_ref")
+                compliance_notes = st.text_area("Notas adicionales (opcional)", placeholder="Contexto de la revisión...", key="compliance_notes", height=80)
+
+            if st.button("🛡️ Generar Informe Compliance", use_container_width=True, type="primary"):
+                if not entity_name:
+                    st.warning("Ingresa al menos la entidad/sujeto obligado solicitante para el informe de compliance.")
+                else:
+                    with st.spinner("Generando informe de compliance..."):
+                        case_data = {
+                            "Entidad solicitante": entity_name,
+                            "Motivo del analisis": review_reason,
+                            "Analista responsable": analyst,
+                            "Referencia interna": internal_ref,
+                            "Notas adicionales": compliance_notes,
+                        }
+                        tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
+                        try:
+                            result = tracer.generate_forensic_compliance_report(
+                                st.session_state.last_address,
+                                filters=filters,
+                                depth=TRACER_PARAMS["max_hops"],
+                                model=OLLAMA_MODEL,
+                                case_data=case_data,
+                            )
+                        finally:
+                            tracer.close()
+                        if "error" in result:
+                            st.error(result["error"])
+                        else:
+                            st.session_state.pericial_report = result
+                            metadata_path = result.get("data_json", "")
+                            if metadata_path and os.path.exists(metadata_path):
+                                with open(metadata_path, "r", encoding="utf-8") as f:
+                                    meta = json.load(f)
+                                st.session_state.ai_report = meta.get("ollama_narrative", "")
+                            else:
+                                st.session_state.ai_report = result.get("ollama_narrative", "")
+                            st.session_state.transaction_graph = result.get("graph")
+                            risk = result.get("risk_score") or {}
+                            if risk:
+                                st.success(f"Informe Compliance generado — Riesgo: {risk.get('level')} ({risk.get('total')}/100)")
+                            else:
+                                st.success("Informe Compliance generado exitosamente!")
 
         # Display AI narrative if generated by any report
         if st.session_state.ai_report:

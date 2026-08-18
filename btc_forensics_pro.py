@@ -1353,29 +1353,59 @@ class BTCForensicsPro:
         resumen: str,
         model: str = "llama3",
         debug: bool = False,
+        address: Optional[str] = None,
         **kwargs
     ) -> Optional[str]:
         """
         Generate an AI-enhanced forensic report (supports Ollama and OpenRouter).
-        
+
         Args:
             resumen: Summary text from build_summary()
             model: Override model name
             debug: Enable debug output
+            address: Optional address to ground the risk evaluation in real
+                     sanctions screening + typology detection instead of
+                     letting the model guess from the transaction text alone
             **kwargs: Additional parameters (ignored, for compatibility)
-            
+
         Returns:
             Generated report text or None if failed
         """
-        prompt = f"""Eres un experto en analisis forense de {self.chain_name} y criptomonedas. 
+        risk_instruction = "1. Evaluacion de riesgo general"
+        patterns_instruction = "3. Patrones de transacciones sospechosos (si los hay)"
+        risk_section = ""
+        if address:
+            try:
+                ctx = self._compute_risk_context(address)
+                sanctions_result = ctx["sanctions"]
+                mixing = ctx["mixing"]
+                peeling = ctx["peeling"]
+                san_flag = sanctions_result.get("sanctioned")
+                san_text = (
+                    "SANCIONADO (aparece en listas de sanciones)" if san_flag is True
+                    else "Sin sanciones conocidas" if san_flag is False
+                    else "No se pudo verificar"
+                )
+                risk_section = f"""
+DATOS REALES (calculados, no los inventes ni los cambies, solo explicalos):
+  Sanciones: {san_text}
+  Mixing detectado: {'SI' if mixing.get('is_mixing') else 'NO'} (confianza {mixing.get('confidence', 0):.2f})
+  Peeling chain detectado: {'SI' if peeling.get('is_peeling_chain') else 'NO'} (longitud maxima {peeling.get('chain_length', 0)})
+"""
+                risk_instruction = "1. Evaluacion de riesgo general - basala EXCLUSIVAMENTE en los datos reales indicados abajo (sanciones, mixing, peeling), no la inventes"
+                patterns_instruction = "3. Patrones de transacciones sospechosos - reporta unicamente los patrones detectados indicados abajo, no inventes otros"
+            except Exception as e:
+                self.log("warning", f"Could not compute risk context for {address}: {e}")
+
+        prompt = f"""Eres un experto en analisis forense de {self.chain_name} y criptomonedas.
 Analiza el siguiente resumen de transacciones y direcciones de {self.chain_name} y genera un informe forense profesional en espanol que incluya:
 
-1. Evaluacion de riesgo general
+{risk_instruction}
 2. Entidades potencialmente involucradas (exchanges, mixers, servicios sancionados, etc.)
-3. Patrones de transacciones sospechosos (si los hay)
+{patterns_instruction}
 4. Recomendaciones para investigacion adicional
 5. Conclusiones ejecutivas
-
+{risk_section}
 Resumen de transacciones:
 {resumen}
 
@@ -1682,6 +1712,7 @@ Informe forense:"""
         resumen: str,
         structured_data: Optional[Dict[str, Any]] = None,
         model: str = "llama3",
+        risk_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Generate an enhanced AI forensic report (supports Ollama and OpenRouter).
@@ -1746,16 +1777,44 @@ Informe forense:"""
             if parts:
                 structured_section = "Datos del analisis:\n" + "\n".join(parts)
 
+        risk_section = ""
+        risk_instruction = "1. Evaluacion de riesgo (bajo/medio/alto) - Incluye el resultado de la verificacion de sanciones"
+        patterns_instruction = "4. Patrones sospechosos detectados"
+        if risk_context:
+            risk = risk_context.get("risk", {})
+            mixing = risk_context.get("mixing", {})
+            peeling = risk_context.get("peeling", {})
+            exposure_pct = risk_context.get("exposure_pct", {})
+            exposure_lines = "\n".join(
+                f"  {ent}: {pct}%" for ent, pct in sorted(exposure_pct.items(), key=lambda x: -x[1])
+            ) or "  Sin datos de contraparte."
+            risk_section = f"""
+PUNTUACION DE RIESGO (calculada deterministicamente a partir de datos on-chain, NO la inventes ni la cambies, solo explicala):
+  PUNTUACION TOTAL: {risk.get('total', 'N/A')}/100 — NIVEL: {risk.get('level', 'N/A')}
+  Sub-puntuacion exposicion a contrapartes: {risk.get('exposure_score', 'N/A')}/100
+  Sub-puntuacion cribado de sanciones: {risk.get('sanctions_score', 'N/A')}/100
+  Sub-puntuacion tipologias detectadas: {risk.get('typology_score', 'N/A')}/100
+
+EXPOSICION A CONTRAPARTES POR VOLUMEN:
+{exposure_lines}
+
+PATRONES DETECTADOS (analisis automatizado, no inventes otros):
+  Mixing: {'SI' if mixing.get('is_mixing') else 'NO'} (confianza {mixing.get('confidence', 0):.2f}) — indicadores: {', '.join(mixing.get('indicators', [])) or 'ninguno'}
+  Peeling chain: {'SI' if peeling.get('is_peeling_chain') else 'NO'} (longitud maxima {peeling.get('chain_length', 0)})
+"""
+            risk_instruction = "1. Evaluacion de riesgo - USA la puntuacion y el nivel indicados abajo tal cual, no inventes ni recalcules otro. Incluye el resultado de la verificacion de sanciones"
+            patterns_instruction = "4. Patrones sospechosos - reporta EXACTAMENTE los patrones detectados indicados abajo (mixing/peeling). Si ambos son NO, indica que no se detectaron patrones automatizados de ocultacion, no inventes otros"
+
         prompt = f"""Eres un experto en analisis forense de {self.chain_name}. Genera un informe profesional en espanol basado en estos datos.
 
 Estructura del informe:
-1. Evaluacion de riesgo (bajo/medio/alto) - Incluye el resultado de la verificacion de sanciones
+{risk_instruction}
 2. Entidades involucradas (exchanges, mixers, etc.)
 3. Analisis temporal (periodos y horarios de actividad)
-4. Patrones sospechosos detectados
+{patterns_instruction}
 5. Recomendaciones
 6. Conclusiones - Menciona explicitamente si la direccion aparece o no en listas de sanciones
-
+{risk_section}
 {structured_section}
 
 Transacciones:
@@ -1812,7 +1871,10 @@ Informe forense:"""
             if filters.get("only_fanin"):
                 edges = [e for e in edges if e.get("to_addr") == address]
             if filters.get("only_fanout"):
-                edges = [e for e in edges if e.get("from_addr") == address or (e.get("hop") is not None and int(e.get("hop")) > 1)]
+                # An edge only qualifies as fan-out if it directly originates
+                # from the analyzed address (mirrors dashboardpro.py's filter
+                # and the pericial/compliance report generators below).
+                edges = [e for e in edges if e.get("from_addr") == address]
 
         if not edges:
             self.log("warning", "No edges after filtering")
@@ -1861,8 +1923,10 @@ Informe forense:"""
             if "from_addr" in df_a.columns:
                 total_out = df_a[df_a["from_addr"] == address]["amount"].sum()
 
-        # 5. Check sanctions
-        sanctions_result = self.check_sanctions(address)
+        # 5. Sanctions + typology detection + exposure + deterministic risk
+        #    score (shared with the other report generators).
+        risk_context = self._compute_risk_context(address, edges=edges)
+        sanctions_result = risk_context["sanctions"]
 
         structured_data = {
             "timeline": timeline_data,
@@ -1874,9 +1938,9 @@ Informe forense:"""
             "sanctions": sanctions_result,
         }
 
-        # 6. Generate AI report with enriched data + sanctions
+        # 6. Generate AI report with enriched data + real risk indicators
         ollama_narrative = self.generate_ai_report_with_ollama_v2(
-            resumen, structured_data=structured_data, model=model
+            resumen, structured_data=structured_data, model=model, risk_context=risk_context
         )
         if not ollama_narrative:
             ollama_narrative = "No se pudo generar el analisis IA. Verifique que Ollama este ejecutandose."
@@ -1894,6 +1958,7 @@ Informe forense:"""
             filters=filters,
             sanctions=sanctions_result,
         )
+        result["risk_score"] = risk_context["risk"]
 
         self.log("info", f"Enhanced report generated: {result.get('folder')}")
         return result
@@ -1984,7 +2049,15 @@ Informe forense:"""
                 total_out = df_a[df_a["from_addr"] == address]["amount"].sum()
         unique_addrs = int(df["from_addr"].nunique() + df["to_addr"].nunique()) if not df.empty else 0
 
-        sanctions_result = self.check_sanctions(address)
+        # Sanctions + typology detection (mixing/peeling chain), computed
+        # deterministically and shared with the other report generators —
+        # feeds Section 6 "Indicios de ocultacion" with real detections
+        # instead of leaving the model to infer patterns from the raw hop
+        # table alone.
+        risk_context = self._compute_risk_context(address, edges=edges)
+        sanctions_result = risk_context["sanctions"]
+        mixing_analysis = risk_context["mixing"]
+        peeling_analysis = risk_context["peeling"]
 
         # 5. Load skill references and build concise context
         plantilla = self._load_skill_file("plantilla-informe.md")
@@ -2076,6 +2149,10 @@ TRANSACCIONES (resumen):
 SANCIONES:
 {json.dumps(sanctions_result, indent=2, ensure_ascii=False)}
 
+PATRONES DE OCULTACION DETECTADOS (analisis automatizado — usa EXACTAMENTE estos resultados en la Seccion 6, no inventes otros):
+  Mixing / servicio de mezcla: {'DETECTADO' if mixing_analysis.get('is_mixing') else 'NO detectado'} (confianza {mixing_analysis.get('confidence', 0):.2f}) — indicadores: {', '.join(mixing_analysis.get('indicators', [])) or 'ninguno'}
+  Peeling chain (fragmentacion progresiva): {'DETECTADO' if peeling_analysis.get('is_peeling_chain') else 'NO detectado'} (longitud maxima de cadena: {peeling_analysis.get('chain_length', 0)})
+
 ESTRUCTURA QUE DEBES SEGUIR:
 {estructura}
 
@@ -2087,7 +2164,8 @@ INSTRUCCIONES:
 2. Sigue EXACTAMENTE la estructura numerada de 10 secciones.
 3. Rellena los datos reales del analisis. Si falta un dato, pon "No disponible" NO inventes.
 4. Usa lenguaje formal y tecnico-juridico.
-5. NO incluyas ningun texto fuera del informe (no pienses en voz alta)."""
+5. En la Seccion 6 (Indicios de ocultacion), reporta UNICAMENTE los patrones marcados como "DETECTADO" arriba. Si ninguno esta detectado, indica expresamente que no se han observado indicios automatizados de ocultacion, no inventes ninguno.
+6. NO incluyas ningun texto fuera del informe (no pienses en voz alta)."""
 
         # 9. Call AI
         old_model = self.ai_model
@@ -2117,4 +2195,303 @@ INSTRUCCIONES:
         )
 
         self.log("info", f"Forensic pericial report generated: {result.get('folder')}")
+        return result
+
+    def _compute_counterparty_exposure(self, edges: List[Dict[str, Any]], address: str) -> Dict[str, float]:
+        """Volume-weighted % of funds moved through each counterparty entity
+        type (from_entity/to_entity), across the given edges. Shared by all
+        report generators so exposure figures are computed the same way
+        everywhere instead of being re-derived (or guessed by the AI) per
+        report type."""
+        df = pd.DataFrame(edges) if edges else pd.DataFrame()
+        if df.empty or "amount" not in df.columns:
+            return {}
+        df_a = df[df["amount"].notna()].copy()
+        if df_a.empty:
+            return {}
+        df_a["amount"] = df_a["amount"].astype(float)
+        vol_by_entity: Dict[str, float] = {}
+        for col in ["from_entity", "to_entity"]:
+            if col in df_a.columns:
+                for ent, amt in df_a.groupby(df_a[col].fillna("unknown"))["amount"].sum().items():
+                    vol_by_entity[ent] = vol_by_entity.get(ent, 0.0) + float(amt)
+        grand_total = sum(vol_by_entity.values()) or 1.0
+        return {ent: round((amt / grand_total) * 100, 2) for ent, amt in vol_by_entity.items()}
+
+    def _compute_risk_context(self, address: str, edges: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Compute real, deterministic risk indicators for `address`:
+        sanctions screening, detected typologies (mixing/peeling chain),
+        counterparty exposure (if edges are supplied) and an overall score.
+
+        Every report generator (simple, enhanced, pericial, compliance)
+        should feed this into its AI prompt instead of asking the model to
+        invent a risk assessment from raw transaction text — the model's
+        job is to explain these numbers, not to compute them.
+        """
+        sanctions_result = self.check_sanctions(address)
+        raw_transactions = self._get_raw_transaction_history(address)
+        mixing_analysis = (
+            self.cluster_analyzer.detect_mixing_patterns(raw_transactions)
+            if raw_transactions else {"is_mixing": False, "confidence": 0.0, "indicators": []}
+        )
+        peeling_analysis = (
+            self.cluster_analyzer.detect_peeling_chain(raw_transactions)
+            if raw_transactions else {"is_peeling_chain": False, "confidence": 0.0, "chain_length": 0}
+        )
+        exposure_pct = self._compute_counterparty_exposure(edges, address) if edges else {}
+        risk = self._compute_risk_score(exposure_pct, sanctions_result, mixing_analysis, peeling_analysis)
+        return {
+            "sanctions": sanctions_result,
+            "mixing": mixing_analysis,
+            "peeling": peeling_analysis,
+            "exposure_pct": exposure_pct,
+            "risk": risk,
+        }
+
+    def _compute_risk_score(
+        self,
+        exposure_pct: Dict[str, float],
+        sanctions_result: Dict[str, Any],
+        mixing_analysis: Dict[str, Any],
+        peeling_analysis: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Deterministically compute a 0-100 risk score from on-chain data,
+        so the figure is reproducible and not left to the LLM to invent.
+        Weighting is intentionally simple/transparent rather than a
+        black-box model, so the derivation can be audited."""
+        weights = self.cluster_analyzer.entity_risk_weights
+
+        # 1. Counterparty exposure: volume-weighted average of each entity
+        #    type's risk weight, scaled to 0-100.
+        exposure_score = 0.0
+        for entity, pct in exposure_pct.items():
+            exposure_score += (pct / 100.0) * weights.get(entity, 0.5) * 100
+
+        # 2. Sanctions screening.
+        if sanctions_result.get("sanctioned") is True:
+            sanctions_score = 100.0
+        elif sanctions_result.get("sanctioned") is False:
+            sanctions_score = 0.0
+        else:
+            sanctions_score = 40.0  # unverifiable is treated as elevated, not clean
+
+        # 3. Detected typologies (mixing / peeling).
+        typology_score = 0.0
+        typology_score += mixing_analysis.get("confidence", 0.0) * 100 * 0.6
+        typology_score += peeling_analysis.get("confidence", 0.0) * 100 * 0.4
+        typology_score = min(100.0, typology_score)
+
+        # Weighted total. Sanctions dominate: a confirmed hit alone should
+        # push the address into "critico" regardless of the other factors.
+        total = (exposure_score * 0.35) + (sanctions_score * 0.40) + (typology_score * 0.25)
+        total = round(min(100.0, max(0.0, total)), 1)
+
+        if total >= 75:
+            level = "CRITICO"
+        elif total >= 50:
+            level = "ALTO"
+        elif total >= 25:
+            level = "MEDIO"
+        else:
+            level = "BAJO"
+
+        return {
+            "total": total,
+            "level": level,
+            "exposure_score": round(exposure_score, 1),
+            "sanctions_score": round(sanctions_score, 1),
+            "typology_score": round(typology_score, 1),
+        }
+
+    def generate_forensic_compliance_report(
+        self,
+        address: str,
+        filters: Optional[Dict] = None,
+        depth: int = 2,
+        model: str = "llama3",
+        case_data: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate an AML/compliance audit report — NOT a judicial expert
+        report. Intended for a regulated entity's compliance function
+        (VASP/exchange onboarding, ongoing monitoring, EDD, SAR/STR
+        decision support).
+
+        The risk score and exposure breakdown are computed deterministically
+        from on-chain data (see _compute_risk_context / _compute_risk_score);
+        the AI narrative explains and contextualizes those figures rather
+        than inventing its own risk assessment.
+
+        Args:
+            address: Blockchain address to analyze
+            filters: Dashboard filters (min_amount, etc.)
+            depth: Neo4j traversal depth
+            model: AI model name
+            case_data: Dict with compliance case info (requesting entity,
+                       reason for review, analyst, internal reference, etc.)
+
+        Returns:
+            Dict with paths to all generated files
+        """
+        from forensic_report_v2 import EnhancedForensicReporter
+
+        self.log("info", f"Generating compliance report for {address}")
+
+        # 1. Collect edge data from Neo4j
+        edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
+        if not edges:
+            self.log("warning", f"No edge data found for {address}")
+            return {"error": "No hay datos de transacciones en Neo4j para esta direccion."}
+
+        # 2. Apply filters
+        if filters:
+            min_amount = filters.get("min_amount", 0.00001)
+            edges = [e for e in edges if float(e.get("amount", 0)) >= min_amount]
+            if filters.get("hide_change"):
+                edges = [e for e in edges if not e.get("is_change", False)]
+            if filters.get("only_hop1"):
+                edges = [e for e in edges if e.get("hop") == 1]
+            if filters.get("only_fanin"):
+                edges = [e for e in edges if e.get("to_addr") == address]
+            if filters.get("only_fanout"):
+                edges = [e for e in edges if e.get("from_addr") == address]
+
+        if not edges:
+            return {"error": "No quedan datos tras aplicar los filtros."}
+
+        # 3. Build text summary
+        resumen = self.build_summary(address)
+
+        # 4. Totals
+        df = pd.DataFrame(edges) if edges else pd.DataFrame()
+        total_in = total_out = 0.0
+        if not df.empty and "amount" in df.columns:
+            df_a = df[df["amount"].notna()].copy()
+            df_a["amount"] = df_a["amount"].astype(float)
+            if "to_addr" in df_a.columns:
+                total_in = df_a[df_a["to_addr"] == address]["amount"].sum()
+            if "from_addr" in df_a.columns:
+                total_out = df_a[df_a["from_addr"] == address]["amount"].sum()
+        unique_addrs = int(df["from_addr"].nunique() + df["to_addr"].nunique()) if not df.empty else 0
+
+        # 5. Sanctions + typology detection + exposure + risk score, all
+        #    computed deterministically and shared with the other report
+        #    generators (see _compute_risk_context).
+        ctx = self._compute_risk_context(address, edges=edges)
+        sanctions_result = ctx["sanctions"]
+        mixing_analysis = ctx["mixing"]
+        peeling_analysis = ctx["peeling"]
+        exposure_pct = ctx["exposure_pct"]
+        risk = ctx["risk"]
+
+        # 6. Load compliance template
+        plantilla = self._load_skill_file("plantilla-compliance.md")
+        secciones = []
+        for line in plantilla.split("\n"):
+            if line.strip().startswith("## SECCI") :
+                secciones.append(line.strip().lstrip("#").strip())
+        estructura = "\n".join(f"{i+1}. {s}" for i, s in enumerate(secciones))
+
+        # 7. Build data sections for the prompt
+        exposure_lines = "\n".join(
+            f"  {ent}: {pct}%" for ent, pct in sorted(exposure_pct.items(), key=lambda x: -x[1])
+        ) or "  Sin datos de contraparte."
+
+        hops_table = []
+        for i, e in enumerate(edges[:60]):
+            hop = e.get("hop", i + 1)
+            txid = (e.get("txid") or "")[:20]
+            ts = e.get("ts", 0)
+            fecha = datetime.utcfromtimestamp(int(ts)).strftime("%d/%m/%Y") if ts else "N/A"
+            from_a = (e.get("from_addr") or "")[:25]
+            to_a = (e.get("to_addr") or "")[:25]
+            amt = float(e.get("amount") or 0)
+            to_entity = e.get("to_entity") or ""
+            hops_table.append(f"{hop},{txid},{fecha},{from_a},{to_a},{amt:.4f},{to_entity}")
+        hops_csv = "\n".join(hops_table)
+
+        case_lines = [f"Direccion analizada: {address}", f"Red: {self.chain_name} ({self.unit})"]
+        if case_data:
+            for k, v in case_data.items():
+                if v:
+                    case_lines.append(f"{k}: {v}")
+        case_section = "\n".join(case_lines)
+
+        risk_section = (
+            f"PUNTUACION TOTAL: {risk['total']}/100 — NIVEL: {risk['level']}\n"
+            f"  Sub-puntuacion exposicion a contrapartes: {risk['exposure_score']}/100\n"
+            f"  Sub-puntuacion cribado de sanciones: {risk['sanctions_score']}/100\n"
+            f"  Sub-puntuacion tipologias detectadas: {risk['typology_score']}/100\n"
+            f"Mixing detectado: {mixing_analysis.get('is_mixing')} (confianza {mixing_analysis.get('confidence', 0):.2f}) — indicadores: {', '.join(mixing_analysis.get('indicators', [])) or 'ninguno'}\n"
+            f"Peeling chain detectado: {peeling_analysis.get('is_peeling_chain')} (longitud maxima {peeling_analysis.get('chain_length', 0)})"
+        )
+
+        # 8. Build prompt
+        prompt = f"""Eres un analista de compliance/AML especializado en activos virtuales. Genera un informe de auditoria de compliance (NO un informe pericial judicial) para el departamento de cumplimiento normativo de un sujeto obligado.
+
+DATOS DEL CASO:
+{case_section}
+
+PUNTUACION DE RIESGO (calculada deterministicamente a partir de datos on-chain, NO la inventes ni la cambies, solo explicala):
+{risk_section}
+
+EXPOSICION A CONTRAPARTES POR VOLUMEN:
+{exposure_lines}
+
+TOTALES:
+Total recibido: {total_in:.4f} {self.unit}
+Total enviado: {total_out:.4f} {self.unit}
+Direcciones unicas relacionadas: {unique_addrs}
+
+TABLA DE HOPS (HOP,HASH,FECHA,ORIGEN,DESTINO,CANTIDAD,ENTIDAD_DESTINO):
+{hops_csv}
+
+TRANSACCIONES (resumen):
+{resumen}
+
+SANCIONES (detalle):
+{json.dumps(sanctions_result, indent=2, ensure_ascii=False)}
+
+ESTRUCTURA QUE DEBES SEGUIR:
+{estructura}
+
+INSTRUCCIONES:
+1. Genera SOLO el informe completo, sin notas ni explicaciones fuera del informe.
+2. Sigue la estructura de secciones indicada.
+3. USA la puntuacion de riesgo y el nivel proporcionados arriba tal cual — no calcules ni inventes otra puntuacion.
+4. Rellena los datos reales del analisis. Si falta un dato, indica "No disponible", no inventes.
+5. En la seccion de recomendacion de compliance, elige UNA recomendacion coherente con el nivel de riesgo calculado y justifica brevemente.
+6. Usa lenguaje formal propio de un informe de auditoria de cumplimiento normativo (AML/CFT), no lenguaje judicial/pericial.
+7. NO incluyas ningun texto fuera del informe (no pienses en voz alta)."""
+
+        # 9. Call AI
+        old_model = self.ai_model
+        if model != "llama3":
+            self.ai_model = model
+        try:
+            compliance_narrative = self._call_ai_api(prompt, timeout=300)
+        finally:
+            if model != "llama3":
+                self.ai_model = old_model
+
+        if not compliance_narrative:
+            compliance_narrative = "No se pudo generar el informe de compliance. Verifique que el proveedor AI este disponible."
+
+        # 10. Generate transaction graph HTML
+        graph_html = self.generate_transaction_graph_html(address, limit=100)
+
+        # 11. Generate report folder
+        reporter = EnhancedForensicReporter(output_dir="reports", chain=self.chain)
+        result = reporter.generate_report_folder(
+            address=address,
+            edges=edges,
+            ollama_narrative=compliance_narrative,
+            transaction_graph_html=graph_html,
+            filters=filters,
+            sanctions=sanctions_result,
+        )
+        result["risk_score"] = risk
+        result["compliance_report"] = True
+
+        self.log("info", f"Compliance report generated: {result.get('folder')} (risk={risk['level']} {risk['total']})")
         return result
