@@ -133,7 +133,7 @@ class AddressAnalyzerService:
             if "last_seen" in address_info:
                 addr_model.last_seen = datetime.fromtimestamp(address_info["last_seen"])
 
-        # WASS API fallback for entity classification (both BTC and ETH)
+        # WASS API fallback for entity classification (all supported chains)
         self._apply_wass_fallback(addr_model, address)
 
         self.logger.info(

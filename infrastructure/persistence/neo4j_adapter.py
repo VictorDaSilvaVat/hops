@@ -434,7 +434,7 @@ class Neo4jAdapter(Neo4jRepository):
         """
         rows = []
         try:
-            recs = self.run_query(query, addr=address, limit=limit, chain=chain)
+            recs = self.run_query(query, **params)
             for rec in recs:
                 row = dict(rec)
                 if not isinstance(row.get('from_labels'), list):
