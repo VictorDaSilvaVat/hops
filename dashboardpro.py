@@ -874,7 +874,17 @@ def show_risk(edges, root, chain="btc"):
 # Main dashboard
 # -------------------------
 def show_dashboard(addr, filters, chain="btc"):
-    edges = fetch_subgraph(addr, depth=TRACER_PARAMS["max_hops"], chain=chain)
+    # TRACER_PARAMS is a module-level dict overwritten every rerun by the
+    # sidebar's live "Red" selectbox — it can drift from the chain this
+    # specific address was actually traced/analyzed with if the user
+    # changes the dropdown afterwards (e.g. just to peek at another chain's
+    # options) without clicking "Iniciar análisis" again. Every report
+    # generator below must use THIS dashboard's locked-in `chain`, not the
+    # live global, or Neo4j queries silently filter on the wrong chain and
+    # come back empty ("No hay datos de transacciones en Neo4j...").
+    tracer_params = {**TRACER_PARAMS, "chain": chain}
+
+    edges = fetch_subgraph(addr, depth=tracer_params["max_hops"], chain=chain)
     edges = [e for e in edges if "amount" in e and e["amount"] is not None]
 
     if not edges:
@@ -954,7 +964,7 @@ def show_dashboard(addr, filters, chain="btc"):
         col_legacy, col_enhanced = st.columns(2)
         with col_legacy:
             if st.button("Generar reporte IA (simple)", use_container_width=True):
-                tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
+                tracer = BTCForensicsPro(**tracer_params, min_amount=filters["min_amount"])
                 try:
                     resumen = tracer.build_summary(st.session_state.last_address)
                     reporte = tracer.generate_ai_report_with_ollama(
@@ -978,12 +988,12 @@ def show_dashboard(addr, filters, chain="btc"):
         with col_enhanced:
             if st.button("Generar reporte IA + PDF (completo)", use_container_width=True):
                 with st.spinner("Generando reporte completo..."):
-                    tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
+                    tracer = BTCForensicsPro(**tracer_params, min_amount=filters["min_amount"])
                     try:
                         result = tracer.generate_enhanced_report(
                             st.session_state.last_address,
                             filters=filters,
-                            depth=TRACER_PARAMS["max_hops"],
+                            depth=tracer_params["max_hops"],
                             model=OLLAMA_MODEL,
                         )
                     finally:
@@ -1028,11 +1038,11 @@ def show_dashboard(addr, filters, chain="btc"):
                             "Hash de transaccion inicial": txhash,
                             "Notas adicionales": notes,
                         }
-                        tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
+                        tracer = BTCForensicsPro(**tracer_params, min_amount=filters["min_amount"])
                         result = tracer.generate_forensic_pericial_report(
                             st.session_state.last_address,
                             filters=filters,
-                            depth=TRACER_PARAMS["max_hops"],
+                            depth=tracer_params["max_hops"],
                             model=OLLAMA_MODEL,
                             case_data=case_data,
                         )
@@ -1075,12 +1085,12 @@ def show_dashboard(addr, filters, chain="btc"):
                             "Referencia interna": internal_ref,
                             "Notas adicionales": compliance_notes,
                         }
-                        tracer = BTCForensicsPro(**TRACER_PARAMS, min_amount=filters["min_amount"])
+                        tracer = BTCForensicsPro(**tracer_params, min_amount=filters["min_amount"])
                         try:
                             result = tracer.generate_forensic_compliance_report(
                                 st.session_state.last_address,
                                 filters=filters,
-                                depth=TRACER_PARAMS["max_hops"],
+                                depth=tracer_params["max_hops"],
                                 model=OLLAMA_MODEL,
                                 case_data=case_data,
                             )
@@ -1404,7 +1414,13 @@ def main():
             tracer.close()
 
     if st.session_state.analysis_done and st.session_state.last_address:
-        show_dashboard(st.session_state.last_address, filters, chain=chain)
+        # Use the chain this address was actually traced with (locked in at
+        # analysis time), not the live sidebar selectbox — the user may have
+        # changed "Red" afterwards just to look at it, without re-running
+        # "Iniciar análisis". Falling back to the live `chain` only covers
+        # the (impossible in practice) case where session_state.chain was
+        # never set.
+        show_dashboard(st.session_state.last_address, filters, chain=st.session_state.get("chain", chain))
 
 def _get_logo_b64():
     try:

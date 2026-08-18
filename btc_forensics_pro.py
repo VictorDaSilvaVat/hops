@@ -1557,7 +1557,9 @@ Informe forense:"""
         """
         Check if an address appears in sanctions lists and get entity identifications.
 
-        Uses the WASS API which supports both BTC and ETH addresses.
+        Uses the WASS API, which searches the address string directly against
+        sanctions/entity lists without needing a chain/network parameter —
+        works across all chains HOPS supports (BTC, ETH, BCH, TRX, ADA).
         Returns sanctions matches and entity identifications.
 
         Args:
@@ -1650,10 +1652,10 @@ Informe forense:"""
 
         # Inline fallback for get_subgraph_edges with date filtering
         depth_literal = f"*1..{depth}"
-        
+
         # Build date filter clause
         date_filter = ""
-        params = {"addr": address, "limit": limit}
+        params = {"addr": address, "limit": limit, "chain": self.chain}
         if start_date:
             date_filter += " AND rel.block_time >= $start_ts"
             params["start_ts"] = int(datetime.fromisoformat(start_date).timestamp())
@@ -1664,11 +1666,12 @@ Informe forense:"""
         query = f"""
         MATCH (root:Address {{address:$addr}})
         MATCH p=(root)-[:SENT{depth_literal}]-(b:Address)
+        WHERE ALL(rel IN relationships(p) WHERE rel.chain IS NULL OR rel.chain = $chain)
         UNWIND relationships(p) AS rel
         WITH DISTINCT rel
         MATCH (a:Address)-[rel]->(b:Address)
         WHERE 1=1 {date_filter}
-        RETURN 
+        RETURN
             a.address AS from_addr,
             b.address AS to_addr,
             rel.amount AS amount,
@@ -1855,6 +1858,7 @@ Informe forense:"""
         self.log("info", f"Generating enhanced report for {address}")
 
         # 1. Collect edge data from Neo4j
+        filters = filters or {}
         edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
         if not edges:
             self.log("warning", f"No edge data found for {address}")
@@ -2005,6 +2009,7 @@ Informe forense:"""
         self.log("info", f"Generating forensic pericial report for {address}")
 
         # 1. Collect edge data from Neo4j
+        filters = filters or {}
         edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
         if not edges:
             self.log("warning", f"No edge data found for {address}")
@@ -2199,22 +2204,36 @@ INSTRUCCIONES:
 
     def _compute_counterparty_exposure(self, edges: List[Dict[str, Any]], address: str) -> Dict[str, float]:
         """Volume-weighted % of funds moved through each counterparty entity
-        type (from_entity/to_entity), across the given edges. Shared by all
-        report generators so exposure figures are computed the same way
-        everywhere instead of being re-derived (or guessed by the AI) per
-        report type."""
-        df = pd.DataFrame(edges) if edges else pd.DataFrame()
-        if df.empty or "amount" not in df.columns:
+        type, across the given edges. Shared by all report generators so
+        exposure figures are computed the same way everywhere instead of
+        being re-derived (or guessed by the AI) per report type.
+
+        Each edge counts its amount exactly ONCE, against whichever side is
+        the counterparty relative to `address` (the other party in a direct
+        hop-1 transaction); for hop 2+ edges, where neither endpoint is the
+        analyzed address, the destination side is used as the representative
+        entity for that flow. Summing both from_entity and to_entity per
+        edge would double the volume of any edge where both endpoints have
+        a known entity type, skewing the percentages.
+        """
+        if not edges:
             return {}
-        df_a = df[df["amount"].notna()].copy()
-        if df_a.empty:
-            return {}
-        df_a["amount"] = df_a["amount"].astype(float)
         vol_by_entity: Dict[str, float] = {}
-        for col in ["from_entity", "to_entity"]:
-            if col in df_a.columns:
-                for ent, amt in df_a.groupby(df_a[col].fillna("unknown"))["amount"].sum().items():
-                    vol_by_entity[ent] = vol_by_entity.get(ent, 0.0) + float(amt)
+        for e in edges:
+            try:
+                amt = float(e.get("amount") or 0)
+            except (TypeError, ValueError):
+                continue
+            if amt <= 0:
+                continue
+            if e.get("from_addr") == address:
+                ent = e.get("to_entity") or "unknown"
+            elif e.get("to_addr") == address:
+                ent = e.get("from_entity") or "unknown"
+            else:
+                ent = e.get("to_entity") or e.get("from_entity") or "unknown"
+            vol_by_entity[ent] = vol_by_entity.get(ent, 0.0) + amt
+
         grand_total = sum(vol_by_entity.values()) or 1.0
         return {ent: round((amt / grand_total) * 100, 2) for ent, amt in vol_by_entity.items()}
 
@@ -2338,6 +2357,7 @@ INSTRUCCIONES:
         self.log("info", f"Generating compliance report for {address}")
 
         # 1. Collect edge data from Neo4j
+        filters = filters or {}
         edges = self.collect_edge_data(address, depth=depth, start_date=filters.get("start_date"), end_date=filters.get("end_date"))
         if not edges:
             self.log("warning", f"No edge data found for {address}")
@@ -2366,8 +2386,9 @@ INSTRUCCIONES:
         df = pd.DataFrame(edges) if edges else pd.DataFrame()
         total_in = total_out = 0.0
         if not df.empty and "amount" in df.columns:
-            df_a = df[df["amount"].notna()].copy()
-            df_a["amount"] = df_a["amount"].astype(float)
+            df_a = df.copy()
+            df_a["amount"] = pd.to_numeric(df_a["amount"], errors="coerce")
+            df_a = df_a[df_a["amount"].notna()]
             if "to_addr" in df_a.columns:
                 total_in = df_a[df_a["to_addr"] == address]["amount"].sum()
             if "from_addr" in df_a.columns:
