@@ -90,6 +90,20 @@ class BlockfrostClient(BaseAPIClient):
             logger.error(f"Error getting address UTxOs for {address}: {e}")
             return []
 
+    def get_asset_info(self, asset_unit: str) -> Optional[Dict[str, Any]]:
+        """Get on-chain metadata for a native asset (policy_id + asset_name hex).
+
+        Returns Blockfrost's /assets/{asset} payload, which includes
+        `asset_name` (hex), `fingerprint`, `quantity`, `metadata` (registered
+        ticker/name/decimals, if the project registered it), and
+        `onchain_metadata` (CIP-25/68 metadata minted with the token, if any).
+        """
+        try:
+            return self._get(f"/assets/{asset_unit}")
+        except Exception as e:
+            logger.error(f"Error getting asset info for {asset_unit}: {e}")
+            return None
+
     def get_address_details(self, address: str) -> Optional[Dict[str, Any]]:
         """Get detailed address info including balance and stake address."""
         try:
@@ -180,6 +194,15 @@ def _sum_ada_from_amount(amount_list: List[Dict[str, Any]]) -> int:
         if item.get("unit") == "lovelace":
             total += int(item.get("quantity", 0))
     return total
+
+
+def _decode_asset_name_hex(asset_name_hex: str) -> str:
+    """Best-effort decode of a Cardano asset_name (hex) to a display string.
+    Falls back to the raw hex if it isn't valid UTF-8 (e.g. binary/NFT ids)."""
+    try:
+        return bytes.fromhex(asset_name_hex).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return asset_name_hex
 
 
 def _extract_assets_from_amount(amount_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
