@@ -549,6 +549,66 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
     finally:
         driver.close()
 
+
+def fetch_token_subgraph(addr, unit, depth=2, limit=5000, chain="ada"):
+    """Same shape as fetch_subgraph, but for a single native token's
+    SENT_TOKEN edges (kept separate from ADA's SENT edges — see
+    _trace_cardano / save_token_transaction). `amount` in the returned rows
+    is the token's raw quantity, not decimal-adjusted."""
+    driver = get_driver()
+    depth_literal = f"*1..{int(depth)}"
+
+    q = f"""
+    MATCH (root:Address {{address:$addr}})
+    WHERE root.chain IS NULL OR root.chain = $chain
+    MATCH p=(root)-[:SENT_TOKEN{depth_literal}]-(b:Address)
+    WHERE ALL(rel IN relationships(p) WHERE rel.unit = $unit)
+    UNWIND relationships(p) AS rel
+    WITH DISTINCT rel
+    MATCH (a:Address)-[rel]->(b:Address)
+    RETURN
+        a.address AS from_addr,
+        b.address AS to_addr,
+        rel.quantity AS amount,
+        rel.txid AS txid,
+        coalesce(rel.hop, 1) AS hop,
+        rel.block_time AS ts,
+        false AS is_change,
+        a.entity_type AS from_entity,
+        b.entity_type AS to_entity,
+        a.labels AS from_labels,
+        b.labels AS to_labels
+    LIMIT $limit
+    """
+
+    rows = []
+    try:
+        with driver.session() as s:
+            for rec in s.run(q, addr=addr, unit=unit, limit=limit, chain=chain):
+                row = dict(rec)
+                if not isinstance(row.get('from_labels'), list):
+                    row['from_labels'] = []
+                if not isinstance(row.get('to_labels'), list):
+                    row['to_labels'] = []
+
+                ts = row.get('ts')
+                if ts:
+                    if hasattr(ts, 'to_native'):
+                        ts = ts.to_native()
+                    if hasattr(ts, 'timestamp'):
+                        ts = ts.timestamp()
+                    try:
+                        row['ts'] = int(float(ts))
+                    except (ValueError, TypeError):
+                        row['ts'] = 0
+                else:
+                    row['ts'] = 0
+
+                rows.append(row)
+        return rows
+    finally:
+        driver.close()
+
 # -------------------------
 # ADA holdings (Cardano)
 # -------------------------
@@ -565,7 +625,21 @@ def get_ada_address_holdings(address: str):
         return {"ada_balance": 0.0, "tokens": [], "utxo_count": 0}
 
 
+def _ada_token_label(t):
+    if t["ticker"]:
+        return t["ticker"]
+    if t["display_name"] and t["display_name"] != t["asset_name_hex"]:
+        return t["display_name"]
+    unit = t["policy_id"] + t["asset_name_hex"]
+    return unit[:15] + "..." + unit[-18:] if len(unit) > 33 else unit
+
+
 def show_ada_tokens(addr):
+    """Renders the ADA holdings panel. Returns (token_unit, token_meta) for
+    the token selected in "Ver grafo de un token", or (None, None) if the
+    user wants the regular ADA view — the caller (show_dashboard) uses this
+    to decide whether to render the Grafo/Sankey/Tabla tabs from ADA edges
+    or from that token's SENT_TOKEN edges."""
     holdings = get_ada_address_holdings(addr)
     ada_balance = holdings.get("ada_balance", 0.0)
     tokens = holdings.get("tokens", [])
@@ -574,7 +648,7 @@ def show_ada_tokens(addr):
     with st.expander(f"🪙 Holdings ADA ({len(tokens)} tokens nativos)", expanded=bool(tokens or ada_balance)):
         if not tokens and not ada_balance and not utxo_count:
             st.caption("No se encontraron datos de holdings (o BLOCKFROST_API_KEY no está configurada).")
-            return None
+            return None, None
 
         col1, col2, col3 = st.columns(3)
         col1.metric("ADA", f"{ada_balance:,.6f} ADA")
@@ -582,14 +656,6 @@ def show_ada_tokens(addr):
         col3.metric("UTXOs", utxo_count)
 
         st.markdown("**Holdings**")
-
-        def _token_label(t):
-            if t["ticker"]:
-                return t["ticker"]
-            if t["display_name"] and t["display_name"] != t["asset_name_hex"]:
-                return t["display_name"]
-            unit = t["policy_id"] + t["asset_name_hex"]
-            return unit[:15] + "..." + unit[-18:] if len(unit) > 33 else unit
 
         rows = [{
             "Holding": "ADA",
@@ -599,7 +665,7 @@ def show_ada_tokens(addr):
         }]
         for t in tokens:
             rows.append({
-                "Holding": _token_label(t),
+                "Holding": _ada_token_label(t),
                 "Cantidad": f"{t['quantity']:,.6f}" if t["decimals"] else f"{t['quantity']:,}",
                 "Policy ID": t["policy_id"],
                 "Asset (hex)": t["asset_name_hex"],
@@ -619,21 +685,32 @@ def show_ada_tokens(addr):
             )
 
         if not tokens:
-            return None
+            return None, None
 
-        options = sorted({_token_label(t) for t in tokens})
+        options = sorted({_ada_token_label(t) for t in tokens})
         selected = st.multiselect(
-            "Filtrar por token",
+            "Filtrar tabla de holdings por token",
             options=options,
             default=[],
-            help="Filtro sobre los tokens que tiene esta dirección ahora mismo. "
-                 "Filtrar el grafo de transacciones por movimientos de un token "
-                 "específico es una mejora futura (requiere rastrear transferencias "
-                 "de tokens, no solo saldos)."
         )
         if selected:
             st.dataframe(df_tokens_only[df_tokens_only["Holding"].isin(selected)], use_container_width=True, hide_index=True)
-        return selected
+
+        st.markdown("---")
+        token_by_label = {_ada_token_label(t): t for t in tokens}
+        graph_choice = st.selectbox(
+            "🔀 Ver Grafo / Sankey / Tabla de un token específico",
+            options=["ADA (por defecto)"] + options,
+            help="Cambia las pestañas Grafo, Sankey y Tabla para mostrar únicamente "
+                 "los movimientos de ese token nativo en vez de ADA. Riesgo y Reporte IA "
+                 "siguen mostrando el análisis completo de la dirección (ADA + sanciones), "
+                 "no son específicos de un token.",
+        )
+        if graph_choice == "ADA (por defecto)":
+            return None, None
+
+        chosen = token_by_label[graph_choice]
+        return chosen["unit"], chosen
 
 # -------------------------
 # Graph
@@ -826,8 +903,58 @@ def show_graph(edges, root_addr=None, unit="BTC"):
         if os.path.exists(graph_file):
             os.remove(graph_file)
 
+    # Add an in-graph "export as PNG" button that grabs the vis-network
+    # canvas directly (client-side, no server round-trip) — this is what
+    # actually lets the user save/print a snapshot, since the graph itself
+    # is a live JS canvas, not an image. `network` is the global variable
+    # name pyvis's template assigns to the vis.Network instance.
+    export_button = """
+    <div style="position:fixed; top:12px; right:12px; z-index:9999;">
+      <button id="hops-export-png" style="background:#6366f1;color:#fff;border:none;padding:8px 14px;
+        border-radius:6px;font-family:sans-serif;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.35);">
+        Exportar PNG
+      </button>
+    </div>
+    <script>
+    (function() {
+      function bindExportButton() {
+        var btn = document.getElementById('hops-export-png');
+        if (!btn || typeof network === 'undefined') return false;
+        btn.addEventListener('click', function() {
+          try {
+            var canvas = network.canvas.frame.canvas;
+            var link = document.createElement('a');
+            link.download = 'hops_grafo.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+          } catch (e) {
+            alert('No se pudo exportar el grafo: ' + e.message);
+          }
+        });
+        return true;
+      }
+      if (!bindExportButton()) {
+        var tries = 0;
+        var iv = setInterval(function() {
+          tries++;
+          if (bindExportButton() || tries > 40) clearInterval(iv);
+        }, 250);
+      }
+    })();
+    </script>
+    """
+    graph_html = graph_html.replace("</body>", export_button + "</body>")
+
     html_base64 = base64.b64encode(graph_html.encode('utf-8')).decode('utf-8')
     iframe_src = f"data:text/html;base64,{html_base64}"
+
+    st.download_button(
+        "⬇️ Descargar grafo interactivo (HTML)",
+        data=graph_html.encode("utf-8"),
+        file_name=f"hops_grafo_{(root_addr or 'grafo')[:16]}.html",
+        mime="text/html",
+        help="Abre este archivo en cualquier navegador para explorar, hacer zoom/pan e imprimir el grafo fuera del dashboard.",
+    )
 
     legend_items = [
         ("Direccion analizada", GRAPH_ROOT_COLOR),
@@ -848,7 +975,7 @@ def show_graph(edges, root_addr=None, unit="BTC"):
         f'<div style="margin-bottom:8px;">{legend_html}</div>',
         unsafe_allow_html=True,
     )
-    st.caption("El grafo se organiza de izquierda a derecha por distancia (hops) desde la dirección analizada 🎯, para poder seguir el flujo de fondos con la vista. El tamaño del nodo refleja el volumen total que pasa por esa dirección, y el grosor de la arista el monto de esa transacción. Pase el cursor sobre nodos y aristas para ver detalles.")
+    st.caption("El grafo se organiza de izquierda a derecha por distancia (hops) desde la dirección analizada 🎯, para poder seguir el flujo de fondos con la vista. El tamaño del nodo refleja el volumen total que pasa por esa dirección, y el grosor de la arista el monto de esa transacción. Pase el cursor sobre nodos y aristas para ver detalles. Para exportar: usa el botón de arriba para descargar el HTML interactivo, o el botón \"Exportar PNG\" dentro del propio grafo para guardar una imagen del estado actual.")
 
     st.markdown(
         f'<iframe src="{iframe_src}" width="100%" height="650" style="border:none; border-radius: 10px;"></iframe>',
@@ -1055,25 +1182,64 @@ def show_dashboard(addr, filters, chain="btc"):
 
     unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
 
+    # When the user picks a specific ADA native token in the Holdings panel,
+    # Grafo/Sankey/Tabla switch to that token's own SENT_TOKEN edges instead
+    # of ADA's SENT edges — Riesgo and Reporte IA stay address-wide (a risk
+    # score / sanctions check isn't a per-token concept).
+    token_edges = None
+    token_unit = None
+    token_meta = None
     if chain == "ada":
-        show_ada_tokens(addr)
+        token_unit, token_meta = show_ada_tokens(addr)
+        if token_unit:
+            token_edges = fetch_token_subgraph(addr, token_unit, depth=tracer_params["max_hops"], chain=chain)
+            token_edges = [e for e in token_edges if "amount" in e and e["amount"] is not None]
+            # `amount` from Neo4j is the raw token quantity (smallest unit);
+            # adjust by decimals so it matches the Holdings panel's display
+            # convention instead of showing e.g. "5000000" for "5.0 PBG".
+            decimals = token_meta.get("decimals") or 0
+            if decimals:
+                divisor = 10 ** decimals
+                for e in token_edges:
+                    e["amount"] = float(e["amount"]) / divisor
+            if filters["only_hop1"]:
+                token_edges = [e for e in token_edges if e.get("hop") == 1]
+            if filters["only_fanin"]:
+                token_edges = [e for e in token_edges if e.get("to_addr") == addr]
+            if filters["only_fanout"]:
+                token_edges = [e for e in token_edges if e.get("from_addr") == addr]
+            if filters["entity"] != "Todas":
+                token_edges = [
+                    e for e in token_edges
+                    if e.get("from_entity") == filters["entity"] or e.get("to_entity") == filters["entity"]
+                ]
+
+    if token_unit:
+        display_edges = token_edges
+        display_unit = (token_meta.get("ticker") or token_meta.get("display_name") or "token")
+        st.info(f"📍 Mostrando **Grafo, Sankey y Tabla** para el token **{display_unit}** "
+                f"(policy ID `{token_meta['policy_id'][:16]}...`), no ADA. "
+                f"Cambia la selección en el panel de Holdings para volver a ADA.")
+    else:
+        display_edges = edges
+        display_unit = unit
 
     tabs = st.tabs(["Grafo", "Sankey", "Heatmap", "Timeline", "Tabla", "Riesgo", "Reporte IA", "Grafo Detallado"])
 
     with tabs[0]:
-        show_graph(edges, root_addr=addr, unit=unit)
+        show_graph(display_edges, root_addr=addr, unit=display_unit)
 
     with tabs[1]:
-        show_sankey(edges, root_addr=addr, unit=unit)
+        show_sankey(display_edges, root_addr=addr, unit=display_unit)
 
     with tabs[2]:
-        show_heatmap(edges)
+        show_heatmap(display_edges)
 
     with tabs[3]:
-        show_timeline(edges)
+        show_timeline(display_edges)
 
     with tabs[4]:
-        df = pd.DataFrame(edges)
+        df = pd.DataFrame(display_edges)
         if "ts" in df.columns:
             df["time"] = pd.to_datetime(df["ts"], unit="s")
             df = df.sort_values("time")

@@ -1007,7 +1007,58 @@ class BTCForensicsPro:
                 if isinstance(out, dict) and out.get("address") == address:
                     received_amount += out.get("amount", 0)
 
-            # Skip dust amounts
+            # Native token (non-ADA) transfers, tracked as their own
+            # SENT_TOKEN edges — completely independent of the ADA dust
+            # filter below, since a token amount (e.g. "0.5 PBG") is not
+            # comparable to the ADA min_amount threshold at all.
+            address_is_input = any(isinstance(inp, dict) and inp.get("address") == address for inp in inputs)
+            address_is_output = any(isinstance(out, dict) and out.get("address") == address for out in outputs)
+
+            if address_is_input:
+                for out in outputs:
+                    if not isinstance(out, dict):
+                        continue
+                    to_addr = out.get("address")
+                    if not to_addr or to_addr == address:
+                        continue
+                    for asset in (out.get("assets") or []):
+                        qty = int(asset.get("quantity", 0) or 0)
+                        unit = (asset.get("policy_id") or "") + (asset.get("asset_name") or "")
+                        if qty <= 0 or not unit:
+                            continue
+                        try:
+                            self.neo4j_repo.save_token_transaction(
+                                txid=txid, from_address=address, to_address=to_addr,
+                                unit=unit, policy_id=asset.get("policy_id", ""),
+                                asset_name_hex=asset.get("asset_name", ""),
+                                quantity=qty, block_time=block_time, hop=hop, chain="ada",
+                            )
+                        except Exception as e:
+                            self.log("error", f"Failed to save ADA token tx {txid} ({unit}): {e}")
+
+            if address_is_output:
+                for inp in inputs:
+                    if not isinstance(inp, dict):
+                        continue
+                    from_addr = inp.get("address")
+                    if not from_addr or from_addr == address:
+                        continue
+                    for asset in (inp.get("assets") or []):
+                        qty = int(asset.get("quantity", 0) or 0)
+                        unit = (asset.get("policy_id") or "") + (asset.get("asset_name") or "")
+                        if qty <= 0 or not unit:
+                            continue
+                        try:
+                            self.neo4j_repo.save_token_transaction(
+                                txid=txid, from_address=from_addr, to_address=address,
+                                unit=unit, policy_id=asset.get("policy_id", ""),
+                                asset_name_hex=asset.get("asset_name", ""),
+                                quantity=qty, block_time=block_time, hop=hop, chain="ada",
+                            )
+                        except Exception as e:
+                            self.log("error", f"Failed to save ADA token tx {txid} ({unit}): {e}")
+
+            # Skip dust amounts (ADA-only; token edges above are already saved)
             if hop == 1 and received_amount < self.min_amount and sent_amount < self.min_amount:
                 continue
 
