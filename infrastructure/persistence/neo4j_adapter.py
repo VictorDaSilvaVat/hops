@@ -178,6 +178,144 @@ class Neo4jAdapter(Neo4jRepository):
             self.logger.error(f"Error saving transaction {txid} from {from_address} to {to_address}: {e}")
             return False
 
+    def save_token_transaction(self, txid: str, from_address: str, to_address: str,
+                               unit: str, policy_id: str, asset_name_hex: str,
+                               quantity: int, block_time: int, hop: int = 1,
+                               chain: str = "ada") -> bool:
+        """
+        Save a native-token transfer (e.g. a Cardano native asset) as its
+        own relationship type, kept completely separate from SENT (which is
+        reserved for the chain's native coin — ADA/BTC/ETH/etc.). Mixing
+        token quantities into SENT.amount would corrupt every ADA total,
+        graph, and Sankey that assumes `amount` is a single comparable unit.
+
+        Args:
+            txid: Transaction ID
+            from_address: Source address
+            to_address: Destination address
+            unit: Full asset identifier (policy_id + asset_name hex) —
+                  matches Blockfrost's `unit` convention, used to filter a
+                  subgraph down to a single specific token.
+            policy_id: Asset policy ID
+            asset_name_hex: Asset name, hex-encoded
+            quantity: Raw token quantity (smallest unit — decimals are a
+                      display-time concern, resolved from asset metadata
+                      when rendering, not stored per-edge).
+            block_time: Unix timestamp of block confirmation
+            hop: Hop distance from the root address
+            chain: Chain identifier (always "ada" today)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not from_address or not to_address or from_address == to_address or not unit:
+            return False
+        try:
+            with self.driver.session() as session:
+                query = """
+                MERGE (from:Address {address: $from_address})
+                ON CREATE SET
+                    from.chain = $chain,
+                    from.entity_type = "unknown",
+                    from.labels = [],
+                    from.first_seen = datetime(),
+                    from.updated_at = datetime()
+                SET from.chain = coalesce(from.chain, $chain),
+                    from.updated_at = datetime()
+
+                MERGE (to:Address {address: $to_address})
+                ON CREATE SET
+                    to.chain = $chain,
+                    to.entity_type = "unknown",
+                    to.labels = [],
+                    to.first_seen = datetime(),
+                    to.updated_at = datetime()
+                SET to.chain = coalesce(to.chain, $chain),
+                    to.updated_at = datetime()
+
+                MERGE (from)-[r:SENT_TOKEN {txid: $txid, unit: $unit}]->(to)
+                SET r.policy_id = $policy_id,
+                    r.asset_name_hex = $asset_name_hex,
+                    r.quantity = $quantity,
+                    r.block_time = $block_time,
+                    r.hop = $hop,
+                    r.chain = $chain,
+                    r.updated_at = datetime()
+                RETURN r.txid as txid
+                """
+                result = session.run(query,
+                                     from_address=from_address,
+                                     to_address=to_address,
+                                     txid=txid,
+                                     unit=unit,
+                                     policy_id=policy_id,
+                                     asset_name_hex=asset_name_hex,
+                                     quantity=quantity,
+                                     block_time=block_time,
+                                     hop=hop,
+                                     chain=chain)
+                return result.single() is not None
+        except Exception as e:
+            self.logger.error(f"Error saving token transaction {txid} ({unit}) from {from_address} to {to_address}: {e}")
+            return False
+
+    def get_token_subgraph_edges(self, address: str, unit: str, depth: int = 2,
+                                 limit: int = 5000, chain: str = "ada") -> List[Dict[str, Any]]:
+        """
+        Get all SENT_TOKEN edges for a single specific native asset (`unit`)
+        in the subgraph around an address — the token-filtered equivalent
+        of get_subgraph_edges. `amount` in the returned rows is the raw
+        token quantity (not decimal-adjusted); the caller resolves
+        decimals/display name for `unit` separately.
+        """
+        depth_literal = f"*1..{int(depth)}"
+        query = f"""
+        MATCH (root:Address {{address:$addr}})
+        MATCH p=(root)-[:SENT_TOKEN{depth_literal}]-(b:Address)
+        WHERE ALL(rel IN relationships(p) WHERE rel.unit = $unit)
+        UNWIND relationships(p) AS rel
+        WITH DISTINCT rel
+        MATCH (a:Address)-[rel]->(b:Address)
+        RETURN
+            a.address AS from_addr,
+            b.address AS to_addr,
+            rel.quantity AS amount,
+            rel.txid AS txid,
+            coalesce(rel.hop, 1) AS hop,
+            rel.block_time AS ts,
+            false AS is_change,
+            a.entity_type AS from_entity,
+            b.entity_type AS to_entity,
+            a.labels AS from_labels,
+            b.labels AS to_labels
+        LIMIT $limit
+        """
+        rows = []
+        try:
+            recs = self.run_query(query, addr=address, unit=unit, limit=limit, chain=chain)
+            for rec in recs:
+                row = dict(rec)
+                if not isinstance(row.get('from_labels'), list):
+                    row['from_labels'] = []
+                if not isinstance(row.get('to_labels'), list):
+                    row['to_labels'] = []
+                ts = row.get('ts')
+                if ts:
+                    if hasattr(ts, 'to_native'):
+                        ts = ts.to_native()
+                    if hasattr(ts, 'timestamp'):
+                        ts = ts.timestamp()
+                    try:
+                        row['ts'] = int(float(ts))
+                    except (ValueError, TypeError):
+                        row['ts'] = 0
+                else:
+                    row['ts'] = 0
+                rows.append(row)
+        except Exception as e:
+            self.logger.error(f"Error getting token subgraph edges for {address} ({unit}): {e}")
+        return rows
+
     def get_address(self, address: str, chain: str = "btc") -> Optional[Address]:
         """
         Retrieve an address from the Neo4j graph database.
