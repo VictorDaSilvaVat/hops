@@ -63,6 +63,41 @@ class BlockfrostAdapter(BlockchainAPI):
             self.logger.error(f"Error getting address info for {address}: {e}")
             return None
 
+    def _parse_token_item(self, client: BlockfrostClient, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Turn one non-lovelace entry of Blockfrost's address `amount` list
+        into a token dict with resolved metadata (ticker/name/decimals)."""
+        unit = item.get("unit", "")
+        if unit == "lovelace" or not unit:
+            return None
+
+        policy_id = unit[:56] if len(unit) >= 56 else ""
+        asset_name_hex = unit[56:] if len(unit) > 56 else ""
+        display_name = _decode_asset_name_hex(asset_name_hex) if asset_name_hex else ""
+        ticker = None
+        decimals = 0
+
+        info = client.get_asset_info(unit)
+        if info:
+            registry_meta = info.get("metadata") or {}
+            onchain_meta = info.get("onchain_metadata") or {}
+            ticker = registry_meta.get("ticker") or onchain_meta.get("ticker")
+            decimals = registry_meta.get("decimals", 0) or 0
+            display_name = (
+                registry_meta.get("name") or onchain_meta.get("name") or display_name
+            )
+
+        raw_quantity = int(item.get("quantity", 0))
+        return {
+            "unit": unit,
+            "policy_id": policy_id,
+            "asset_name_hex": asset_name_hex,
+            "display_name": display_name or asset_name_hex or "(sin nombre)",
+            "ticker": ticker,
+            "decimals": decimals,
+            "quantity_raw": raw_quantity,
+            "quantity": raw_quantity / (10 ** decimals) if decimals else raw_quantity,
+        }
+
     def get_address_tokens(self, address: str, chain: str = "ada") -> List[Dict[str, Any]]:
         """List native tokens currently held by a Cardano address, with
         on-chain metadata resolved (ticker/name/decimals) where available.
@@ -74,52 +109,40 @@ class BlockfrostAdapter(BlockchainAPI):
         legitimate "USD" token vs. an impersonation minted under a
         different policy_id) can be told apart.
         """
+        return self.get_address_holdings(address).get("tokens", [])
+
+    def get_address_holdings(self, address: str, chain: str = "ada") -> Dict[str, Any]:
+        """Full holdings summary for a Cardano address, mirroring a block
+        explorer's address overview: ADA balance (kept separate from native
+        tokens), the list of native tokens with resolved metadata, and the
+        current UTxO count.
+        """
+        empty = {"ada_balance": 0.0, "tokens": [], "utxo_count": 0}
         client = self._ensure_client()
         if not client:
-            return []
+            return empty
         try:
             details = client.get_address_details(address)
             if not details:
-                return []
+                return empty
 
+            ada_balance = 0.0
             tokens = []
             for item in details.get("amount", []):
-                unit = item.get("unit", "")
-                if unit == "lovelace" or not unit:
+                if item.get("unit") == "lovelace":
+                    ada_balance = _from_lovelaces(int(item.get("quantity", 0)))
                     continue
+                token = self._parse_token_item(client, item)
+                if token:
+                    tokens.append(token)
 
-                policy_id = unit[:56] if len(unit) >= 56 else ""
-                asset_name_hex = unit[56:] if len(unit) > 56 else ""
-                display_name = _decode_asset_name_hex(asset_name_hex) if asset_name_hex else ""
-                ticker = None
-                decimals = 0
+            utxos = client.get_address_utxos(address)
+            utxo_count = len(utxos) if isinstance(utxos, list) else 0
 
-                info = client.get_asset_info(unit)
-                if info:
-                    registry_meta = info.get("metadata") or {}
-                    onchain_meta = info.get("onchain_metadata") or {}
-                    ticker = registry_meta.get("ticker") or onchain_meta.get("ticker")
-                    decimals = registry_meta.get("decimals", 0) or 0
-                    display_name = (
-                        registry_meta.get("name") or onchain_meta.get("name") or display_name
-                    )
-
-                raw_quantity = int(item.get("quantity", 0))
-                tokens.append({
-                    "unit": unit,
-                    "policy_id": policy_id,
-                    "asset_name_hex": asset_name_hex,
-                    "display_name": display_name or asset_name_hex or "(sin nombre)",
-                    "ticker": ticker,
-                    "decimals": decimals,
-                    "quantity_raw": raw_quantity,
-                    "quantity": raw_quantity / (10 ** decimals) if decimals else raw_quantity,
-                })
-
-            return tokens
+            return {"ada_balance": ada_balance, "tokens": tokens, "utxo_count": utxo_count}
         except Exception as e:
-            self.logger.error(f"Error getting tokens for {address}: {e}")
-            return []
+            self.logger.error(f"Error getting holdings for {address}: {e}")
+            return empty
 
     def get_transaction(self, txid: str, chain: str = "ada") -> Optional[Dict[str, Any]]:
         """Get transaction details from Blockfrost."""
