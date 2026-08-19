@@ -16,12 +16,71 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.lines import Line2D
 import networkx as nx
 import pandas as pd
 
 from security import safe_path_component
 
 logger = logging.getLogger(__name__)
+
+# Same palette as the interactive dashboard graph (dashboardpro.py) so the
+# static report image reads as a continuation of the same visual language,
+# not a different tool.
+GRAPH_ENTITY_COLORS = {
+    "exchange": "#3b82f6",
+    "mixer": "#ef4444",
+    "sanctioned": "#b91c1c",
+    "darknet_market": "#7f1d1d",
+    "darkmarket": "#7f1d1d",
+    "gambling": "#f59e0b",
+    "bridge": "#22c55e",
+    "wallet_service": "#06b6d4",
+    "mining_pool": "#8b5cf6",
+    "defi_protocol": "#14b8a6",
+    "marketplace": "#f97316",
+    "individual": "#6b7280",
+    "unknown": "#6b7280",
+    "other": "#6b7280",
+    None: "#6b7280",
+}
+GRAPH_ROOT_COLOR = "#fbbf24"
+
+
+def _bfs_levels_from_edges(edges: List[Dict[str, Any]], root_addr: str) -> Dict[str, int]:
+    """Graph-distance (in hops) from root_addr to every address in `edges`,
+    via BFS treating the edges as undirected. See the equivalent helper in
+    dashboardpro.py for the full rationale — kept as a separate copy here
+    since this module has no dependency on the Streamlit UI module."""
+    adjacency: Dict[str, set] = {}
+    all_nodes = set()
+    for e in edges:
+        a, b = e.get("from_addr"), e.get("to_addr")
+        if not a or not b:
+            continue
+        all_nodes.add(a)
+        all_nodes.add(b)
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    levels: Dict[str, int] = {}
+    if root_addr is not None:
+        levels[root_addr] = 0
+        queue = [root_addr]
+        head = 0
+        while head < len(queue):
+            node = queue[head]
+            head += 1
+            for neighbor in adjacency.get(node, ()):
+                if neighbor not in levels:
+                    levels[neighbor] = levels[node] + 1
+                    queue.append(neighbor)
+
+    max_level = max(levels.values(), default=0)
+    for node in all_nodes:
+        if node not in levels:
+            levels[node] = max_level + 1
+    return levels
 
 RE_UNSAFE_PDF = re.compile(r'[^\x20-\x7E\x80-\xFF\u00C0-\u024F\u0400-\u04FF\u2000-\u206F\u20A0-\u20CF\u2100-\u214F\u2150-\u218F\u2190-\u21FF\u2200-\u22FF\u2300-\u23FF\u2500-\u257F\u2580-\u259F]')
 
@@ -291,66 +350,95 @@ class EnhancedForensicReporter:
         return paths
 
     def _generate_graph_image(self, folder, edges, data):
-        """Generate a static graph visualization as PNG using networkx + matplotlib."""
+        """Generate a static graph visualization as PNG using networkx + matplotlib.
+
+        Laid out left-to-right by hop distance from the analyzed address
+        (BFS, same convention as the interactive dashboard graph) instead of
+        a force-directed layout, so the transaction flow can actually be
+        followed by eye in a printed/PDF report — force-directed layouts
+        tend to clump into an unreadable ball once there are more than a
+        handful of nodes.
+        """
         graph_path = os.path.join(folder, "graph_chart.png")
         df = pd.DataFrame(edges) if edges else pd.DataFrame()
         if df.empty:
             return None
         fig = None
         try:
+            address = data.get("address", "")
             G = nx.DiGraph()
+            node_entity: Dict[str, str] = {}
             for _, r in df.iterrows():
                 frm = r.get("from_addr", "")
                 to = r.get("to_addr", "")
                 if frm and to:
                     amt = float(r.get("amount", 0))
                     G.add_edge(frm, to, weight=amt, txid=r.get("txid", ""))
+                    if r.get("from_entity"):
+                        node_entity[frm] = r.get("from_entity")
+                    if r.get("to_entity"):
+                        node_entity[to] = r.get("to_entity")
 
             if G.number_of_nodes() == 0:
                 return None
 
-            fig, ax = plt.subplots(figsize=(12, 10))
-            pos = nx.spring_layout(G, k=2.5, iterations=50, seed=42)
+            levels = _bfs_levels_from_edges(edges, address)
+            for node in G.nodes():
+                G.nodes[node]["level"] = levels.get(node, 0)
+            num_levels = max(levels.values(), default=0) + 1
+
+            fig, ax = plt.subplots(figsize=(max(12, 3.2 * num_levels), 9))
+            pos = nx.multipartite_layout(G, subset_key="level", align="vertical")
 
             edge_weights = [max(0.5, G[u][v].get("weight", 1)) for u, v in G.edges()]
             max_w = max(edge_weights) if edge_weights else 1
             edge_widths = [1 + 4 * (w / max_w) for w in edge_weights]
 
             node_colors = []
-            address = data.get("address", "")
-            for node in G.nodes():
-                if node == address:
-                    node_colors.append("#e53935")
-                elif node in df["from_addr"].values and G.out_degree(node) > G.in_degree(node):
-                    node_colors.append("#43a047")
-                else:
-                    node_colors.append("#1e88e5")
-
             node_sizes = []
             for node in G.nodes():
                 if node == address:
-                    node_sizes.append(500)
+                    node_colors.append(GRAPH_ROOT_COLOR)
+                    node_sizes.append(650)
                 else:
+                    node_colors.append(GRAPH_ENTITY_COLORS.get(node_entity.get(node), GRAPH_ENTITY_COLORS[None]))
                     deg = G.degree(node)
-                    node_sizes.append(100 + deg * 30)
+                    node_sizes.append(150 + deg * 40)
 
-            nx.draw_networkx_edges(G, pos, alpha=0.3, width=edge_widths, arrows=True,
-                                   arrowstyle="->", arrowsize=12, ax=ax)
+            nx.draw_networkx_edges(G, pos, alpha=0.35, width=edge_widths, arrows=True,
+                                   arrowstyle="->", arrowsize=12, ax=ax, connectionstyle="arc3,rad=0.08")
             nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes,
-                                   alpha=0.9, ax=ax)
+                                   edgecolors="#1a1d2e", linewidths=0.8, alpha=0.95, ax=ax)
 
             labels = {n: n[:8] + "..." for n in G.nodes()}
-            nx.draw_networkx_labels(G, pos, labels, font_size=6, font_color="#333", ax=ax)
+            nx.draw_networkx_labels(G, pos, labels, font_size=6, font_color="#222", ax=ax)
 
-            ax.set_title("Grafo de Transacciones", fontsize=14, fontweight="bold", pad=15)
+            # Amount labels only when the graph is small enough to stay
+            # legible — the full transaction table elsewhere in the report
+            # is the source of truth for exact figures either way.
+            if G.number_of_edges() <= 40:
+                edge_labels = {(u, v): f"{d['weight']:.4f}" for u, v, d in G.edges(data=True)}
+                nx.draw_networkx_edge_labels(G, pos, edge_labels, font_size=5.5,
+                                             font_color="#555", ax=ax, label_pos=0.5,
+                                             bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.6))
+
+            ax.set_title("Grafo de Transacciones (por distancia a la direccion analizada)",
+                         fontsize=13, fontweight="bold", pad=15)
             ax.axis("off")
 
             legend_elements = [
-                plt.Rectangle((0, 0), 1, 1, color="#e53935", label="Direccion analizada"),
-                plt.Rectangle((0, 0), 1, 1, color="#43a047", label="Remitente"),
-                plt.Rectangle((0, 0), 1, 1, color="#1e88e5", label="Destinatario"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=GRAPH_ROOT_COLOR,
+                          markersize=10, label="Direccion analizada"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=GRAPH_ENTITY_COLORS["exchange"],
+                          markersize=9, label="Exchange"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=GRAPH_ENTITY_COLORS["mixer"],
+                          markersize=9, label="Mixer"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=GRAPH_ENTITY_COLORS["sanctioned"],
+                          markersize=9, label="Sancionado / Darknet"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=GRAPH_ENTITY_COLORS[None],
+                          markersize=9, label="Desconocido / individual"),
             ]
-            ax.legend(handles=legend_elements, loc="upper right", fontsize=8)
+            ax.legend(handles=legend_elements, loc="upper left", fontsize=7, framealpha=0.9)
 
             plt.tight_layout()
             plt.savefig(graph_path, dpi=150, bbox_inches="tight")

@@ -17,6 +17,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pyvis.network import Network
+import plotly.graph_objects as go
 import streamlit.components.v1 as components
 import base58
 import hashlib
@@ -549,52 +550,80 @@ def fetch_subgraph(addr, depth=2, limit=5000, chain="btc"):
         driver.close()
 
 # -------------------------
-# ADA native tokens (Cardano)
+# ADA holdings (Cardano)
 # -------------------------
 @st.cache_data(ttl=300, show_spinner=False)
-def get_ada_address_tokens(address: str):
-    """Fetch native tokens currently held by a Cardano address, resolved
-    with on-chain metadata (ticker/name) where the project registered it.
-    Mirrors what a block explorer's "Tokens" tab shows for the address."""
+def get_ada_address_holdings(address: str):
+    """Fetch full holdings for a Cardano address — ADA balance (kept
+    separate from native tokens), native tokens with resolved on-chain
+    metadata (ticker/name), and current UTxO count. Mirrors what a block
+    explorer's address overview page shows."""
     try:
         adapter = BlockfrostAdapter()
-        return adapter.get_address_tokens(address)
+        return adapter.get_address_holdings(address)
     except Exception:
-        return []
+        return {"ada_balance": 0.0, "tokens": [], "utxo_count": 0}
 
 
 def show_ada_tokens(addr):
-    tokens = get_ada_address_tokens(addr)
-    with st.expander(f"🪙 Tokens nativos en esta dirección ({len(tokens)})", expanded=bool(tokens)):
-        if not tokens:
-            st.caption("No se encontraron tokens nativos (o BLOCKFROST_API_KEY no está configurada).")
+    holdings = get_ada_address_holdings(addr)
+    ada_balance = holdings.get("ada_balance", 0.0)
+    tokens = holdings.get("tokens", [])
+    utxo_count = holdings.get("utxo_count", 0)
+
+    with st.expander(f"🪙 Holdings ADA ({len(tokens)} tokens nativos)", expanded=bool(tokens or ada_balance)):
+        if not tokens and not ada_balance and not utxo_count:
+            st.caption("No se encontraron datos de holdings (o BLOCKFROST_API_KEY no está configurada).")
             return None
 
-        df_tokens = pd.DataFrame([
-            {
-                "Token": t["ticker"] or t["display_name"],
-                "Nombre on-chain": t["display_name"],
-                "Cantidad": t["quantity"],
+        col1, col2, col3 = st.columns(3)
+        col1.metric("ADA", f"{ada_balance:,.6f} ADA")
+        col2.metric("Native Assets", len(tokens))
+        col3.metric("UTXOs", utxo_count)
+
+        st.markdown("**Holdings**")
+
+        def _token_label(t):
+            if t["ticker"]:
+                return t["ticker"]
+            if t["display_name"] and t["display_name"] != t["asset_name_hex"]:
+                return t["display_name"]
+            unit = t["policy_id"] + t["asset_name_hex"]
+            return unit[:15] + "..." + unit[-18:] if len(unit) > 33 else unit
+
+        rows = [{
+            "Holding": "ADA",
+            "Cantidad": f"{ada_balance:,.6f} ADA",
+            "Policy ID": "",
+            "Asset (hex)": "",
+        }]
+        for t in tokens:
+            rows.append({
+                "Holding": _token_label(t),
+                "Cantidad": f"{t['quantity']:,.6f}" if t["decimals"] else f"{t['quantity']:,}",
                 "Policy ID": t["policy_id"],
                 "Asset (hex)": t["asset_name_hex"],
-            }
-            for t in tokens
-        ])
-        st.dataframe(df_tokens, use_container_width=True, hide_index=True)
+            })
+        df_holdings = pd.DataFrame(rows)
+        st.dataframe(df_holdings, use_container_width=True, hide_index=True)
 
         # Flag potential impersonation: same display name/ticker, different policy_id.
-        dupes = df_tokens[df_tokens.duplicated(subset=["Token"], keep=False)]
+        df_tokens_only = df_holdings.iloc[1:]
+        dupes = df_tokens_only[df_tokens_only.duplicated(subset=["Holding"], keep=False)]
         if not dupes.empty:
             st.warning(
                 "⚠️ Hay más de un token con el mismo nombre pero distinto Policy ID en esta dirección "
                 "— revisa el Policy ID antes de asumir que se trata del token legítimo:\n\n"
-                + "\n".join(f"- **{t}**: {', '.join(dupes[dupes['Token'] == t]['Policy ID'])}"
-                             for t in dupes["Token"].unique())
+                + "\n".join(f"- **{t}**: {', '.join(dupes[dupes['Holding'] == t]['Policy ID'])}"
+                             for t in dupes["Holding"].unique())
             )
 
-        options = sorted({t["ticker"] or t["display_name"] for t in tokens})
+        if not tokens:
+            return None
+
+        options = sorted({_token_label(t) for t in tokens})
         selected = st.multiselect(
-            "Filtrar tabla de tokens por nombre",
+            "Filtrar por token",
             options=options,
             default=[],
             help="Filtro sobre los tokens que tiene esta dirección ahora mismo. "
@@ -603,7 +632,7 @@ def show_ada_tokens(addr):
                  "de tokens, no solo saldos)."
         )
         if selected:
-            st.dataframe(df_tokens[df_tokens["Token"].isin(selected)], use_container_width=True, hide_index=True)
+            st.dataframe(df_tokens_only[df_tokens_only["Holding"].isin(selected)], use_container_width=True, hide_index=True)
         return selected
 
 # -------------------------
@@ -636,6 +665,48 @@ def _fmt_labels(labels):
     return html.escape(str(labels)) if labels else ""
 
 
+def _bfs_levels(edges, root_addr):
+    """Graph-distance (in hops) from root_addr to every other address that
+    appears in `edges`, computed via BFS over the edges treated as
+    undirected (money can flow toward or away from the root). Used to lay
+    the graph out in columns by distance from the analyzed address instead
+    of a force-directed blob, so the transaction flow reads left-to-right.
+
+    Any node not reachable from root_addr (shouldn't normally happen since
+    every edge here came from tracing outward from it, but filters can
+    disconnect things) is placed one column past the deepest reachable node.
+    """
+    adjacency = {}
+    all_nodes = set()
+    for e in edges:
+        a, b = e.get("from_addr"), e.get("to_addr")
+        if not a or not b:
+            continue
+        all_nodes.add(a)
+        all_nodes.add(b)
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    levels = {}
+    if root_addr in all_nodes or root_addr is not None:
+        levels[root_addr] = 0
+        queue = [root_addr]
+        head = 0
+        while head < len(queue):
+            node = queue[head]
+            head += 1
+            for neighbor in adjacency.get(node, ()):
+                if neighbor not in levels:
+                    levels[neighbor] = levels[node] + 1
+                    queue.append(neighbor)
+
+    max_level = max(levels.values(), default=0)
+    for node in all_nodes:
+        if node not in levels:
+            levels[node] = max_level + 1
+    return levels
+
+
 def show_graph(edges, root_addr=None, unit="BTC"):
     if not edges:
         st.info("Sin datos para grafo.")
@@ -651,6 +722,14 @@ def show_graph(edges, root_addr=None, unit="BTC"):
         node_volume[e["to_addr"]] = node_volume.get(e["to_addr"], 0.0) + amt
     max_volume = max(node_volume.values()) if node_volume else 1.0
     max_amount = max((float(e.get("amount") or 0) for e in edges), default=1.0) or 1.0
+
+    # Hop level per node via BFS from the analyzed address (undirected —
+    # money can flow either into or out of it), used to arrange the graph
+    # left-to-right by distance from the root instead of a force-directed
+    # blob. This is what actually makes the flow readable (Crystal/
+    # Chainalysis-style investigation graphs are laid out this way, not with
+    # physics simulation).
+    node_level = _bfs_levels(edges, root_addr)
 
     def node_size(addr):
         if addr == root_addr:
@@ -679,6 +758,7 @@ def show_graph(edges, root_addr=None, unit="BTC"):
             addr,
             label=("\U0001F3AF " if is_root else "") + addr[:12] + "...",
             title=tooltip,
+            level=node_level.get(addr, 0),
             color={
                 "background": GRAPH_ROOT_COLOR if is_root else GRAPH_ENTITY_COLORS.get(entity, "#6b7280"),
                 "border": "#fef3c7" if is_root else ("#f87171" if is_high_risk else "#1a1d2e"),
@@ -713,8 +793,24 @@ def show_graph(edges, root_addr=None, unit="BTC"):
 
     net.set_options("""
     {
-      "physics": {"solver": "forceAtlas2Based", "forceAtlas2Based": {"gravitationalConstant": -60, "centralGravity": 0.008, "springLength": 160, "avoidOverlap": 0.6}, "stabilization": {"iterations": 150}},
-      "edges": {"smooth": {"type": "dynamic"}, "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}},
+      "layout": {
+        "hierarchical": {
+          "enabled": true,
+          "direction": "LR",
+          "sortMethod": "directed",
+          "levelSeparation": 260,
+          "nodeSpacing": 110,
+          "treeSpacing": 180,
+          "blockShifting": true,
+          "edgeMinimization": true
+        }
+      },
+      "physics": {
+        "solver": "hierarchicalRepulsion",
+        "hierarchicalRepulsion": {"nodeDistance": 140, "springLength": 140, "springConstant": 0.02, "damping": 0.15},
+        "stabilization": {"iterations": 150}
+      },
+      "edges": {"smooth": {"type": "cubicBezier", "forceDirection": "horizontal", "roundness": 0.45}, "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}},
       "interaction": {"hover": true, "tooltipDelay": 100, "navigationButtons": true, "keyboard": true}
     }
     """)
@@ -752,7 +848,7 @@ def show_graph(edges, root_addr=None, unit="BTC"):
         f'<div style="margin-bottom:8px;">{legend_html}</div>',
         unsafe_allow_html=True,
     )
-    st.caption("El tamaño del nodo refleja el volumen total que pasa por esa dirección. El grosor de la arista refleja el monto de la transacción. Pase el cursor sobre nodos y aristas para ver detalles.")
+    st.caption("El grafo se organiza de izquierda a derecha por distancia (hops) desde la dirección analizada 🎯, para poder seguir el flujo de fondos con la vista. El tamaño del nodo refleja el volumen total que pasa por esa dirección, y el grosor de la arista el monto de esa transacción. Pase el cursor sobre nodos y aristas para ver detalles.")
 
     st.markdown(
         f'<iframe src="{iframe_src}" width="100%" height="650" style="border:none; border-radius: 10px;"></iframe>',
@@ -762,7 +858,7 @@ def show_graph(edges, root_addr=None, unit="BTC"):
 # -------------------------
 # Sankey
 # -------------------------
-def show_sankey(edges):
+def show_sankey(edges, root_addr=None, unit="BTC"):
     if not edges:
         st.info("Sin datos para Sankey.")
         return
@@ -777,12 +873,54 @@ def show_sankey(edges):
     df["to_entity"] = df.get("to_entity", None).fillna("unknown")
     df["amount"] = df["amount"].astype(float)
     top = (
-        df.groupby(["from_addr", "to_addr", "from_entity", "to_entity"], as_index=False)
+        df.groupby(["from_addr", "to_addr", "from_entity", "to_entity"], as_index=False)["amount"]
         .sum()
         .sort_values("amount", ascending=False)
-        .head(200)
+        .head(60)  # cap link count so the diagram stays legible
     )
-    st.dataframe(top, use_container_width=True)
+
+    addrs = pd.unique(top[["from_addr", "to_addr"]].values.ravel())
+    node_index = {addr: i for i, addr in enumerate(addrs)}
+    entity_by_addr = {}
+    for _, r in top.iterrows():
+        entity_by_addr.setdefault(r["from_addr"], r["from_entity"])
+        entity_by_addr.setdefault(r["to_addr"], r["to_entity"])
+
+    node_labels = [
+        ("🎯 " if a == root_addr else "") + a[:10] + "..." for a in addrs
+    ]
+    node_colors = [
+        GRAPH_ROOT_COLOR if a == root_addr else GRAPH_ENTITY_COLORS.get(entity_by_addr.get(a), GRAPH_ENTITY_COLORS[None])
+        for a in addrs
+    ]
+    node_hover = [
+        f"{html.escape(a)}<br>Entidad: {html.escape(str(entity_by_addr.get(a) or 'unknown'))}" for a in addrs
+    ]
+
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=14, thickness=16,
+            line=dict(color="rgba(255,255,255,0.25)", width=0.5),
+            label=node_labels, color=node_colors,
+            customdata=node_hover, hovertemplate="%{customdata}<extra></extra>",
+        ),
+        link=dict(
+            source=[node_index[a] for a in top["from_addr"]],
+            target=[node_index[a] for a in top["to_addr"]],
+            value=top["amount"],
+            hovertemplate=f"%{{source.label}} → %{{target.label}}<br>%{{value:.8f}} {unit}<extra></extra>",
+            color="rgba(99,102,241,0.35)",
+        ),
+    )])
+    fig.update_layout(
+        font=dict(color="#e2e8f0", size=11),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=650,
+        margin=dict(l=10, r=10, t=10, b=10),
+    )
+    st.caption("Flujo de fondos agregado entre direcciones — el grosor de cada banda es proporcional al monto acumulado. Limitado a los 60 flujos de mayor volumen para mantener el diagrama legible.")
+    st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------
 # Heatmap
@@ -926,7 +1064,7 @@ def show_dashboard(addr, filters, chain="btc"):
         show_graph(edges, root_addr=addr, unit=unit)
 
     with tabs[1]:
-        show_sankey(edges)
+        show_sankey(edges, root_addr=addr, unit=unit)
 
     with tabs[2]:
         show_heatmap(edges)
