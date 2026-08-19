@@ -610,6 +610,52 @@ def fetch_token_subgraph(addr, unit, depth=2, limit=5000, chain="ada"):
         driver.close()
 
 # -------------------------
+# BTC address overview
+# -------------------------
+@st.cache_data(ttl=300, show_spinner=False)
+def get_btc_address_overview(address: str):
+    """Fetch balance/received/sent/tx-count for a Bitcoin address directly
+    from Blockstream — mirrors the header stats of a block explorer's
+    address page. Bitcoin has no native-token concept (unlike Cardano), so
+    this is intentionally just the coin-level summary."""
+    try:
+        from infrastructure.adapters.blockstream_adapter import BlockstreamAdapter
+        adapter = BlockstreamAdapter()
+        info = adapter.get_address_info(address)
+        if not info:
+            return None
+        stats = info.get("chain_stats", {}) or {}
+        mempool = info.get("mempool_stats", {}) or {}
+        funded = stats.get("funded_txo_sum", 0)
+        spent = stats.get("spent_txo_sum", 0)
+        return {
+            "balance_btc": (funded - spent) / 1e8,
+            "received_btc": funded / 1e8,
+            "sent_btc": spent / 1e8,
+            "tx_count": stats.get("tx_count", 0),
+            "unconfirmed_tx_count": mempool.get("tx_count", 0),
+        }
+    except Exception:
+        return None
+
+
+def show_btc_overview(addr):
+    overview = get_btc_address_overview(addr)
+    with st.expander("₿ Resumen de la dirección BTC", expanded=bool(overview)):
+        if not overview:
+            st.caption("No se pudo obtener el resumen desde Blockstream para esta dirección.")
+            return
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Saldo", f"{overview['balance_btc']:,.8f} BTC")
+        col2.metric("Total entrante", f"{overview['received_btc']:,.8f} BTC")
+        col3.metric("Total saliente", f"{overview['sent_btc']:,.8f} BTC")
+        col4.metric("Transacciones", f"{overview['tx_count']:,}")
+
+        if overview.get("unconfirmed_tx_count"):
+            st.caption(f"⏳ {overview['unconfirmed_tx_count']} transacción(es) sin confirmar en mempool (no incluidas arriba).")
+
+# -------------------------
 # ADA holdings (Cardano)
 # -------------------------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -906,10 +952,20 @@ def show_graph(edges, root_addr=None, unit="BTC"):
     # Add an in-graph "export as PNG" button that grabs the vis-network
     # canvas directly (client-side, no server round-trip) — this is what
     # actually lets the user save/print a snapshot, since the graph itself
-    # is a live JS canvas, not an image. `network` is the global variable
-    # name pyvis's template assigns to the vis.Network instance.
+    # is a live JS canvas, not an image. Also freeze physics once the
+    # hierarchical auto-layout finishes stabilizing, so dragging a single
+    # node afterwards moves only that node instead of the whole connected
+    # cluster (physics otherwise keeps re-simulating and drags neighbors
+    # along to preserve the hierarchy). A "Reordenar" button lets the user
+    # re-run the auto-layout if they want to undo manual dragging.
+    # `network` is the global variable name pyvis's template assigns to the
+    # vis.Network instance.
     export_button = """
-    <div style="position:fixed; top:12px; right:12px; z-index:9999;">
+    <div style="position:fixed; top:12px; right:12px; z-index:9999; display:flex; gap:8px;">
+      <button id="hops-reflow" style="background:#374151;color:#fff;border:none;padding:8px 14px;
+        border-radius:6px;font-family:sans-serif;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.35);">
+        🔄 Reordenar
+      </button>
       <button id="hops-export-png" style="background:#6366f1;color:#fff;border:none;padding:8px 14px;
         border-radius:6px;font-family:sans-serif;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.35);">
         Exportar PNG
@@ -917,27 +973,53 @@ def show_graph(edges, root_addr=None, unit="BTC"):
     </div>
     <script>
     (function() {
-      function bindExportButton() {
-        var btn = document.getElementById('hops-export-png');
-        if (!btn || typeof network === 'undefined') return false;
-        btn.addEventListener('click', function() {
-          try {
-            var canvas = network.canvas.frame.canvas;
-            var link = document.createElement('a');
-            link.download = 'hops_grafo.png';
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-          } catch (e) {
-            alert('No se pudo exportar el grafo: ' + e.message);
-          }
-        });
+      function freezePhysics() {
+        if (typeof network !== 'undefined') {
+          network.setOptions({ physics: { enabled: false } });
+        }
+      }
+
+      function bindButtons() {
+        if (typeof network === 'undefined') return false;
+
+        // Once the initial hierarchical layout settles, turn physics off
+        // so individual nodes can be dragged freely afterwards.
+        network.once('stabilizationIterationsDone', freezePhysics);
+
+        var exportBtn = document.getElementById('hops-export-png');
+        if (exportBtn) {
+          exportBtn.addEventListener('click', function() {
+            try {
+              var canvas = network.canvas.frame.canvas;
+              var link = document.createElement('a');
+              link.download = 'hops_grafo.png';
+              link.href = canvas.toDataURL('image/png');
+              link.click();
+            } catch (e) {
+              alert('No se pudo exportar el grafo: ' + e.message);
+            }
+          });
+        }
+
+        var reflowBtn = document.getElementById('hops-reflow');
+        if (reflowBtn) {
+          reflowBtn.addEventListener('click', function() {
+            // Re-enable physics and re-stabilize to restore the automatic
+            // hierarchical arrangement, undoing any manual dragging.
+            network.setOptions({ physics: { enabled: true } });
+            network.once('stabilizationIterationsDone', freezePhysics);
+            network.stabilize();
+          });
+        }
+
         return true;
       }
-      if (!bindExportButton()) {
+
+      if (!bindButtons()) {
         var tries = 0;
         var iv = setInterval(function() {
           tries++;
-          if (bindExportButton() || tries > 40) clearInterval(iv);
+          if (bindButtons() || tries > 40) clearInterval(iv);
         }, 250);
       }
     })();
@@ -975,7 +1057,7 @@ def show_graph(edges, root_addr=None, unit="BTC"):
         f'<div style="margin-bottom:8px;">{legend_html}</div>',
         unsafe_allow_html=True,
     )
-    st.caption("El grafo se organiza de izquierda a derecha por distancia (hops) desde la dirección analizada 🎯, para poder seguir el flujo de fondos con la vista. El tamaño del nodo refleja el volumen total que pasa por esa dirección, y el grosor de la arista el monto de esa transacción. Pase el cursor sobre nodos y aristas para ver detalles. Para exportar: usa el botón de arriba para descargar el HTML interactivo, o el botón \"Exportar PNG\" dentro del propio grafo para guardar una imagen del estado actual.")
+    st.caption("El grafo se organiza de izquierda a derecha por distancia (hops) desde la dirección analizada 🎯, para poder seguir el flujo de fondos con la vista. El tamaño del nodo refleja el volumen total que pasa por esa dirección, y el grosor de la arista el monto de esa transacción. Pase el cursor sobre nodos y aristas para ver detalles. Una vez que el grafo termina de acomodarse, puedes arrastrar cada dirección individualmente para ajustarlo a tu gusto sin que arrastre al resto — usa \"🔄 Reordenar\" (dentro del grafo) para volver al orden automático. Para exportar: usa el botón de arriba para descargar el HTML interactivo, o \"Exportar PNG\" dentro del propio grafo para guardar una imagen del estado actual.")
 
     st.markdown(
         f'<iframe src="{iframe_src}" width="100%" height="650" style="border:none; border-radius: 10px;"></iframe>',
@@ -1181,6 +1263,9 @@ def show_dashboard(addr, filters, chain="btc"):
         return
 
     unit = {"btc": "BTC", "eth": "ETH", "bch": "BCH", "trx": "TRX", "ada": "ADA"}.get(chain, "BTC")
+
+    if chain == "btc":
+        show_btc_overview(addr)
 
     # When the user picks a specific ADA native token in the Holdings panel,
     # Grafo/Sankey/Tabla switch to that token's own SENT_TOKEN edges instead
